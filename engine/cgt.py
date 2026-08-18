@@ -408,10 +408,20 @@ def _normalize_symbol_renames(stmt: Statement) -> list[str]:
     return notes
 
 
-def _sum_cash_aud(items, fx: RbaRates):
+def _sum_cash_aud(items, fx: RbaRates, window: tuple[date, date], dropped: dict):
+    """Sum cash items falling inside the FY window, translated at each item's own date.
+
+    Statements routinely cover more than the FY being reported (extra history for
+    FIFO, or a period that simply runs past 30 June); items outside the window
+    belong to another year's return and are counted in `dropped`, not here.
+    """
+    fy_start, fy_end = window
     rows, total_aud = [], 0.0
     by_ccy = defaultdict(float)
     for it in items:
+        if not (fy_start <= it.d <= fy_end):
+            dropped["n"] += 1
+            continue
         aud, rate = fx.to_aud(it.amount, it.currency, it.d)
         rows.append(dict(currency=it.currency, date=str(it.d), description=it.description,
                          amount=round(it.amount, 2), fx=rate, aud=round(aud, 2)))
@@ -440,6 +450,11 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
         warnings.append(
             f"uploaded data ends {stmt.period_end}, before the end of "
             f"{fy_label(opts.fy_end_year)} — results are provisional.")
+    if stmt.period_end and stmt.period_end > fy_end:
+        warnings.append(
+            f"uploaded data extends to {stmt.period_end}, past the end of "
+            f"{fy_label(opts.fy_end_year)} — post-30-June activity is used only for "
+            "context and is excluded from this year's figures.")
 
     excluded = defaultdict(int)
     for t in stmt.trades:
@@ -676,12 +691,19 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
                                   note=explained or "review"))
 
     # ---------------- other income ----------------
-    div_rows, div_aud, div_ccy = _sum_cash_aud(stmt.dividends, fx)
-    wht_rows, wht_aud, wht_ccy = _sum_cash_aud(stmt.withholding_tax, fx)
-    int_rows, int_aud, int_ccy = _sum_cash_aud(stmt.interest, fx)
-    fee_rows, fee_aud, fee_ccy = _sum_cash_aud(stmt.fees, fx)
-    bor_rows, bor_aud, bor_ccy = _sum_cash_aud(stmt.borrow_fees, fx)
-    fxp_rows, fxp_aud, fxp_ccy = _sum_cash_aud(stmt.forex_pl, fx)
+    fy_win = (fy_start, fy_end)
+    dropped_cash = {"n": 0}
+    div_rows, div_aud, div_ccy = _sum_cash_aud(stmt.dividends, fx, fy_win, dropped_cash)
+    wht_rows, wht_aud, wht_ccy = _sum_cash_aud(stmt.withholding_tax, fx, fy_win, dropped_cash)
+    int_rows, int_aud, int_ccy = _sum_cash_aud(stmt.interest, fx, fy_win, dropped_cash)
+    fee_rows, fee_aud, fee_ccy = _sum_cash_aud(stmt.fees, fx, fy_win, dropped_cash)
+    bor_rows, bor_aud, bor_ccy = _sum_cash_aud(stmt.borrow_fees, fx, fy_win, dropped_cash)
+    fxp_rows, fxp_aud, fxp_ccy = _sum_cash_aud(stmt.forex_pl, fx, fy_win, dropped_cash)
+    if dropped_cash["n"]:
+        warnings.append(
+            f"{dropped_cash['n']} dividend/interest/fee/FX rows dated outside "
+            f"{fy_label(opts.fy_end_year)} were excluded from Other amounts — they belong "
+            "to another year's return.")
     if not stmt.forex_pl and any(t.category == "Forex" for t in stmt.trades):
         warnings.append(
             "Forex trades exist but no 'Forex P/L Details' section was found. Realised FX "
