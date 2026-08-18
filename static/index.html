@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IBKR AU Tax Report</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>IBKR Australian Tax Report</h1>
+    <p class="tag">Activity Statement / Realized Summary CSV &rarr; CGT working paper (CSV + PDF).
+      All processing happens locally on this machine — no data leaves it.</p>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="card" id="upload-card">
+    <div id="dropzone" tabindex="0" role="button" aria-label="Upload IBKR CSV statements">
+      <div class="dz-icon">&#8681;</div>
+      <div class="dz-title">Drop IBKR statement CSVs here</div>
+      <div class="dz-sub">or <span class="link">browse files</span> — annual Activity Statement,
+        plus the Realized Summary export if you have it (adds FX P/L detail).
+        Multiple consecutive years improve FIFO accuracy.</div>
+      <input type="file" id="file-input" accept=".csv,text/csv" multiple hidden>
+    </div>
+    <ul id="file-list"></ul>
+
+    <div class="options">
+      <label>Financial year (end year)
+        <input type="number" id="fy" placeholder="auto-detect" min="2000" max="2100">
+      </label>
+      <label>Entity type
+        <select id="entity">
+          <option value="individual">Individual</option>
+          <option value="trust">Trust</option>
+          <option value="smsf">SMSF (complying)</option>
+          <option value="company">Company</option>
+        </select>
+      </label>
+      <label>Prior-year capital losses (AUD)
+        <input type="number" id="carried" placeholder="0.00" min="0" step="0.01">
+      </label>
+      <button id="analyze" disabled>Generate report</button>
+    </div>
+    <div id="error" class="error" hidden></div>
+  </section>
+
+  <section id="results" hidden>
+    <section class="card" id="summary-card">
+      <div class="results-head">
+        <div>
+          <h2 id="res-title"></h2>
+          <p class="muted" id="res-meta"></p>
+        </div>
+        <div class="downloads">
+          <a id="dl-pdf" class="btn primary" download>PDF report</a>
+          <a id="dl-csv" class="btn" download>Workpaper CSV</a>
+          <a id="dl-zip" class="btn" download>All files (ZIP)</a>
+        </div>
+      </div>
+      <div class="headline" id="headline"></div>
+      <div class="labels-row" id="ato-labels"></div>
+    </section>
+
+    <section class="card warn-card" id="warnings-card" hidden>
+      <h3>Warnings — read before relying on the figures</h3>
+      <ul id="warnings"></ul>
+    </section>
+
+    <section class="card flag-card" id="flags-card" hidden>
+      <h3>Cross-year flags — amendments &amp; tracking</h3>
+      <ul id="flags"></ul>
+    </section>
+
+    <section class="card" id="recon-card">
+      <h3>Reconciliation against IBKR</h3>
+      <p id="recon-summary"></p>
+      <div id="recon-tables"></div>
+    </section>
+
+    <section class="card">
+      <nav class="tabs" id="tabs"></nav>
+      <div id="table-host"></div>
+    </section>
+
+    <p class="disclaimer">Record-keeping and calculation working paper only — not tax, financial
+      or legal advice; no view is expressed on capital vs revenue account. Review by a registered
+      tax agent before lodgment. 本工具仅作记录与计算用途，不构成税务建议；数字须经注册税务师复核。</p>
+  </section>
+
+  <div id="busy" hidden><div class="spinner"></div><span>Parsing statements and building the report…</span></div>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
