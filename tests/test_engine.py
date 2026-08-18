@@ -330,3 +330,46 @@ def test_fx_aud_passthrough_and_weekend_fallback():
     r_sat, used = FX.rate("USD", dt.date(2025, 8, 9))
     r_fri, _ = FX.rate("USD", dt.date(2025, 8, 8))
     assert r_sat == r_fri and used == dt.date(2025, 8, 8)
+
+
+# ---------------------------------------------------------------- FY windowing
+
+def _div(d, amt, desc="XYZ Cash Dividend"):
+    return ["Dividends", "Data", "USD", d, desc, amt]
+
+
+def test_cash_items_outside_fy_excluded():
+    """Statements often span more than the reported FY (extra FIFO history, or a
+    period running past 30 June). Only in-FY income belongs in this return."""
+    rep = run([trade("Stocks", "XYZ", "2025-09-01, 10:00:00", 10, -1000, 0, code="O")],
+              period="July 1, 2024 - August 14, 2026",
+              dividends=[_div("2024-09-02", 1000.0),    # prior FY
+                         _div("2025-11-14", 25.0),      # in FY
+                         _div("2026-07-15", 500.0)],    # next FY
+              interest=[["Interest", "Data", "USD", "2026-08-03", "USD Credit Interest", 40.0]])
+    oi = rep["summary"]["other_income"]
+    assert oi["dividends_by_ccy"] == {"USD": 25.0}
+    assert oi["interest_aud"] == 0.0
+    assert any("dated outside FY2025-26" in w for w in rep["warnings"])
+    assert len(rep["other_income"]["dividends"]) == 1
+
+
+def test_cash_items_on_fy_boundaries_included():
+    rep = run([trade("Stocks", "XYZ", "2025-09-01, 10:00:00", 10, -1000, 0, code="O")],
+              period="July 1, 2025 - June 30, 2026",
+              dividends=[_div("2025-07-01", 10.0), _div("2026-06-30", 20.0)])
+    assert rep["summary"]["other_income"]["dividends_by_ccy"] == {"USD": 30.0}
+    assert not any("dated outside" in w for w in rep["warnings"])
+
+
+def test_statement_past_fy_end_warns():
+    rep = run([trade("Stocks", "XYZ", "2025-09-01, 10:00:00", 10, -1000, 0, code="O")],
+              period="July 1, 2025 - August 14, 2026")
+    assert any("past the end of FY2025-26" in w for w in rep["warnings"])
+
+
+def test_bundled_rba_table_covers_reportable_years():
+    """A stale rate table raises FxError on any leg past its last published date,
+    which blocks the whole run — keep the bundle ahead of the latest closed FY."""
+    _, last = FX.coverage("USD")
+    assert last >= dt.date(2026, 6, 30)

@@ -61,6 +61,14 @@ Demo data (fictional account, covers every lifecycle path):
 - **Windows: `setup.ps1 cannot be loaded because running scripts is
   disabled`.** Launch it as shown above with `-ExecutionPolicy Bypass`, which
   applies to that one invocation only.
+- **`no RBA USD rate within 10 days on or before <date>`.** The bundled rate
+  table stops before that date. Rates are never extrapolated — a run aborts
+  rather than translate a leg at a stale rate. Refresh the table:
+  `curl -o data/rba_f11.csv https://www.rba.gov.au/statistics/tables/csv/f11.1-data.csv`
+  Note this bites on any leg in the uploaded statement, not just legs inside
+  the reported FY: the whole file is translated to build FIFO history before
+  the year is windowed. A statement running past 30 June therefore needs rates
+  up to its own end date.
 
 ## What it computes
 
@@ -68,7 +76,13 @@ Demo data (fictional account, covers every lifecycle path):
   reconciliation against their Realized P/L column).
 - Every leg translated at the **RBA daily rate for its own date** (s 960-50
   ITAA 1997); rates bundled in `data/rba_f11.csv` (RBA table F11.1 — replace
-  with a fresh download to extend coverage).
+  with a fresh download to extend coverage). Non-trading days fall back up to
+  10 days; beyond that the run aborts rather than guess.
+- **Only the reported FY is counted.** Uploading extra periods is expected and
+  safe: earlier data supplies FIFO history, and both CGT events and income
+  rows (dividends, withholding tax, interest, fees, FX) are windowed to
+  1 July – 30 June before anything is totalled. Rows falling outside are
+  reported as an excluded-row warning, never silently added.
 - **Written options: CGT event D2 at grant** (s 104-40(2)), never discountable
   (s 115-25(3)). Options still open at 30 June are assessable that year
   ("strict" view); a deferred/closed-basis figure is shown for comparison.
