@@ -5,7 +5,7 @@ import datetime as dt
 import pytest
 
 from demo.make_demo import OPT, opos, statement, trade
-from engine.cgt import (Options, compute_tax_report, fy_label, fy_of,
+from engine.cgt import (Options, compute_tax_report, detect_fy, fy_label, fy_of,
                         held_12_months, parse_option_symbol)
 from engine.fx import RbaRates
 from engine.outputs import build_workpaper_csv, safe_cell
@@ -373,3 +373,50 @@ def test_bundled_rba_table_covers_reportable_years():
     which blocks the whole run — keep the bundle ahead of the latest closed FY."""
     _, last = FX.coverage("USD")
     assert last >= dt.date(2026, 6, 30)
+
+
+# ---------------------------------------------------------------- FY detection
+
+def _stmt(period, trades, **kw):
+    return parse_statement(statement(period, "2026-08-18, 09:00:00 AEST", trades=trades, **kw),
+                           "test.csv")
+
+
+def test_detect_fy_prefers_the_latest_finished_year():
+    """Statements are pulled after year end, so they routinely run past 30 June.
+    The barely-started year is not the one being lodged."""
+    st = _stmt("November 11, 2025 - August 14, 2026", [
+        trade("Stocks", "XYZ", "2026-02-01, 10:00:00", 10, -1000, 0, code="O"),
+        trade("Stocks", "XYZ", "2026-07-20, 10:00:00", -10, 1100, 0, code="C"),
+    ])
+    assert detect_fy(st) == 2026
+    assert fy_of(st.period_end) == 2027          # what the old rule would have picked
+
+
+def test_detect_fy_breaks_whole_year_ties_toward_the_latest():
+    """Day-count majority cannot separate two complete years; uploading consecutive
+    years for FIFO history is the recommended workflow, so this must not tie."""
+    st = _stmt("July 1, 2024 - June 30, 2026", [
+        trade("Stocks", "XYZ", "2024-09-02, 10:00:00", 10, -1000, 0, code="O"),
+        trade("Stocks", "XYZ", "2025-11-03, 10:00:00", -10, 1100, 0, code="C"),
+    ])
+    assert detect_fy(st) == 2026
+
+
+def test_detect_fy_falls_back_when_no_year_has_finished():
+    st = _stmt("July 2, 2026 - August 14, 2026", [
+        trade("Stocks", "XYZ", "2026-07-02, 10:00:00", 10, -1000, 0, code="O"),
+    ])
+    assert detect_fy(st) == 2027
+
+
+def test_detect_fy_uses_income_rows_when_there_are_no_trades():
+    st = _stmt("July 1, 2025 - August 14, 2026", [],
+               dividends=[_div("2026-03-13", 32.76)])
+    assert detect_fy(st) == 2026
+
+
+def test_detect_fy_without_a_period_is_undetermined():
+    st = _stmt("July 1, 2025 - June 30, 2026", [])
+    st.period_end = None
+    assert detect_fy(st) is None

@@ -17,7 +17,7 @@ from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
 from engine import (Options, ParseError, EngineError, FxError, RbaRates, TOOL_VERSION,
                     build_pdf, build_workpaper_csv, build_zip, compute_tax_report,
-                    fy_of, merge_statements, parse_statement)
+                    detect_fy, merge_statements, parse_statement)
 
 MAX_FILES = 12
 RESULT_TTL = 60 * 60  # seconds
@@ -77,7 +77,7 @@ def analyze():
     except Exception as e:
         return jsonify(error=f"could not read statements: {e}"), 422
 
-    fy_default = fy_of(merged.period_end) if merged.period_end else None
+    fy_default = detect_fy(merged)
     try:
         fy = int(request.form.get("fy") or fy_default or 0)
     except ValueError:

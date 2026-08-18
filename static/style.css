@@ -68,6 +68,7 @@ main { padding: 24px 0 60px; }
   display: flex; flex-wrap: wrap; gap: 16px; align-items: end; margin-top: 18px;
 }
 .options label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.field-hint { font-size: 11px; font-weight: 400; line-height: 1.35; color: var(--muted); max-width: 22ch; }
 .options input, .options select {
   font: inherit; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 7px;
   min-width: 170px; background: #fff; color: var(--ink);
