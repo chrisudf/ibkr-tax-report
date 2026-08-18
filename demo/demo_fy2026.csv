@@ -1,0 +1,40 @@
+Statement,Header,Field Name,Field Value
+Statement,Data,BrokerName,Interactive Brokers Australia Pty Ltd. (DEMO)
+Statement,Data,Title,Activity Statement
+Statement,Data,Period,"July 1, 2025 - June 30, 2026"
+Statement,Data,WhenGenerated,"2026-07-05, 09:00:00 AEST"
+Account Information,Header,Field Name,Field Value
+Account Information,Data,Account,U9999999
+Account Information,Data,Name,Demo Client
+Account Information,Data,Base Currency,USD
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Stocks,USD,AAPL,"2026-01-20, 10:00:00",-100,,,19000,-1,-15001,3998,,C
+Trades,Data,Order,Equity and Index Options,USD,MSFT 19DEC25 400 P,"2025-09-15, 10:00:00",1,,,-200,-0.66,499.34,298.68,,C
+Trades,Data,Order,Equity and Index Options,USD,NVDA 17JUL26 100 P,"2026-05-10, 10:00:00",-2,,,600,-1.32,,,,O
+Trades,Data,Order,Equity and Index Options,USD,PFE 21NOV25 25 P,"2025-10-06, 10:00:00",-1,,,80,-0.66,,,,O
+Trades,Data,Order,Equity and Index Options,USD,PFE 21NOV25 25 P,"2025-11-22, 16:20:00",1,,,0,0,,,,A;C
+Trades,Data,Order,Stocks,USD,PFE,"2025-11-22, 16:20:00",100,,,-2500,0,,,,A;O
+Trades,Data,Order,Equity and Index Options,USD,AMD 16JAN26 200 C,"2025-08-04, 10:00:00",1,,,-400,-0.66,,,,O
+Trades,Data,Order,Equity and Index Options,USD,AMD 16JAN26 200 C,"2026-01-17, 16:20:00",-1,,,0,0,-400.66,-400.66,,C;Ep
+Trades,Data,Order,Stocks,USD,GOOG,"2025-07-10, 10:00:00",20,,,-3600,-1,,,,O
+Trades,Data,Order,Stocks,USD,GOOG,"2026-05-01, 10:00:00",-100,,,2100,-1,-1800.5,298.5,,C
+Corporate Actions,Header,Asset Category,Currency,Report Date,Date/Time,Description,Quantity,Proceeds,Value,Realized P/L,Code
+Corporate Actions,Data,Stocks,USD,2026-03-16,"2026-03-15, 20:25:00","GOOG(US02079K3059) Split 10 for 1 (GOOG, ALPHABET INC-CL C, US02079K3059)",180,0,0,0,
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L,Code
+Open Positions,Data,Summary,Stocks,USD,GOOG,100,,,1800.5,,,,
+Open Positions,Data,Summary,Stocks,USD,PFE,100,,,2500,,,,
+Open Positions,Data,Summary,Equity and Index Options,USD,NVDA 17JUL26 100 P,-2,,,-598.68,,,,
+Dividends,Header,Currency,Date,Description,Amount
+Dividends,Data,USD,2025-11-14,AAPL(US0378331005) Cash Dividend USD 0.25 per Share (Ordinary Dividend),25.0
+Withholding Tax,Header,Currency,Date,Description,Amount
+Withholding Tax,Data,USD,2025-11-14,AAPL(US0378331005) Cash Dividend USD 0.25 per Share - US Tax,-3.75
+Interest,Header,Currency,Date,Description,Amount
+Interest,Data,USD,2026-01-05,USD Credit Interest for Dec-2025,12.34
+Fees,Header,Subtitle,Currency,Date,Description,Amount
+Fees,Data,Other Fees,USD,2025-12-01,Market data subscription,-10.0
+Codes,Header,Code,Meaning
+Codes,Data,A,Assignment
+Codes,Data,C,Closing Trade
+Codes,Data,Ep,Resulted from an Expired Position
+Codes,Data,Ex,Exercise
+Codes,Data,O,Opening Trade
