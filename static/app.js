@@ -158,6 +158,15 @@ function stat(label, value, opts = {}) {
 function renderResults(data) {
   const s = data.summary;
   $("results").hidden = false;
+  // Show which year was inferred: an unnoticed wrong year makes every figure wrong
+  // while the report itself still looks perfectly healthy.
+  if (data.fy_detected) {
+    const fyBox = $("fy");
+    if (!fyBox.value) fyBox.value = data.fy_detected;
+    const hint = $("fy-hint");
+    hint.textContent = "auto-detected from the statement — change it if you are reporting a different year";
+    hint.hidden = false;
+  }
   $("res-title").textContent = `${data.meta.account} — ${data.meta.fy} (${s.entity})`;
   $("res-meta").textContent =
     `Statement period ${data.meta.period} · ${data.meta.fx_source} · generated ${data.meta.generated}`;

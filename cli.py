@@ -17,7 +17,7 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
 from engine import (Options, RbaRates, build_pdf, build_workpaper_csv, build_zip,
-                    compute_tax_report, fy_of, merge_statements, parse_statement)
+                    compute_tax_report, detect_fy, merge_statements, parse_statement)
 
 
 def main() -> int:
@@ -37,7 +37,7 @@ def main() -> int:
         with open(p, "rb") as fh:
             stmts.append(parse_statement(fh.read(), os.path.basename(p)))
     merged = merge_statements(stmts)
-    fy = args.fy or (fy_of(merged.period_end) if merged.period_end else None)
+    fy = args.fy or detect_fy(merged)
     if not fy:
         print("could not determine financial year — pass --fy", file=sys.stderr)
         return 2

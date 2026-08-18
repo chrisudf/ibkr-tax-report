@@ -78,6 +78,11 @@ Demo data (fictional account, covers every lifecycle path):
   ITAA 1997); rates bundled in `data/rba_f11.csv` (RBA table F11.1 — replace
   with a fresh download to extend coverage). Non-trading days fall back up to
   10 days; beyond that the run aborts rather than guess.
+- **Financial year defaults to the latest one that has ended** and that the
+  uploaded data covers — not the year the statement happens to end in.
+  Statements are pulled after 30 June, so keying off the end date alone lands
+  on a barely-started year. The detected value is shown in the form and can be
+  overridden (`--fy` on the CLI).
 - **Only the reported FY is counted.** Uploading extra periods is expected and
   safe: earlier data supplies FIFO history, and both CGT events and income
   rows (dividends, withholding tax, interest, fees, FX) are windowed to

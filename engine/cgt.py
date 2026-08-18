@@ -67,6 +67,30 @@ def fy_of(d: date) -> int:
     return d.year + 1 if d.month >= 7 else d.year
 
 
+def detect_fy(stmt) -> int | None:
+    """Default financial year to report: the latest one that has ENDED and that the
+    statement actually covers.
+
+    Keying off the statement's end date alone lands on the wrong year whenever the
+    export runs past 30 June — which is the normal case, since statements are pulled
+    after year end. A year that has not finished cannot be lodged, so prefer the
+    latest finished year with activity in it. Day-count majority is not used: the
+    recommended workflow uploads several consecutive years for FIFO history, and
+    whole years tie at 365 days.
+    """
+    end = stmt.period_end
+    if end is None:
+        return None
+    years = {fy_of(t.dt.date()) for t in stmt.trades}
+    for items in (stmt.dividends, stmt.withholding_tax, stmt.interest,
+                  stmt.fees, stmt.borrow_fees, stmt.forex_pl):
+        years |= {fy_of(it.d) for it in items}
+    if not years:
+        return fy_of(end)
+    finished = {y for y in years if fy_window(y)[1] <= end}
+    return max(finished) if finished else max(years)
+
+
 def held_12_months(open_d: date, close_d: date) -> bool:
     """s 115-25(1): asset acquired at least 12 months before the CGT event."""
     try:
