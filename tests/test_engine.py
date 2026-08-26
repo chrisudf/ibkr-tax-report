@@ -145,6 +145,41 @@ def test_assignment_of_prior_year_written_flags_amendment():
     assert "FY2024-25" in rep["amendment_flags"][0]
 
 
+def test_assignment_after_fy_end_is_noted_not_returned_as_d2():
+    """Written in-FY, assigned in the next one: s 104-40(5) disregards the D2
+    gain, so nothing is returned — but the contract was open at 30 June and its
+    absence from the D2 list has to be explained, or the list silently
+    disagrees with the year-end position snapshot."""
+    rep = run([
+        trade(OPT, "ECHO 02JUL26 115 P", "2026-06-05, 10:00:00", -1, 906, -1, code="O"),
+        trade(OPT, "ECHO 02JUL26 115 P", "2026-07-02, 06:20:00", 1, 0, 0, code="A;C"),
+        trade("Stocks", "ECHO", "2026-07-02, 06:20:00", 100, -11500, 0, code="A;O"),
+    ], period="July 1, 2025 - August 14, 2026")
+    assert rep["summary"]["d2_open_written"] == 0.0
+    assert rep["d2_open"] == []
+    assert rep["amendment_flags"] == []        # return not lodged yet: nothing to amend
+    assert rep["transfers"] == []              # the fold itself lands in the next FY
+    note = [n for n in rep["cross_year_notes"] if n.startswith("ECHO 02JUL26 115 P")]
+    assert len(note) == 1
+    assert "104-40(5)" in note[0]
+    assert "assignment on 2026-07-02" in note[0]
+    assert "still open at 2026-06-30" in note[0]
+
+
+def test_buyback_after_fy_end_keeps_d2_unlike_assignment():
+    """The mirror case: a buy-back is not an exercise, so s 104-40(5) does not
+    apply and the D2 gain stays in the year the option was written."""
+    rep = run([
+        trade(OPT, "ECHO 02JUL26 110 P", "2026-06-15, 10:00:00", -1, 552, -1, code="O"),
+        trade(OPT, "ECHO 02JUL26 110 P", "2026-07-03, 10:00:00", 1, -300, -1, code="C"),
+    ], period="July 1, 2025 - August 14, 2026")
+    assert len(rep["d2_open"]) == 1
+    assert rep["d2_open"][0]["symbol"] == "ECHO 02JUL26 110 P"
+    note = [n for n in rep["cross_year_notes"] if n.startswith("ECHO 02JUL26 110 P")]
+    assert len(note) == 1
+    assert "capital loss in FY2026-27" in note[0]
+
+
 def test_short_call_assignment_adds_premium_to_stock_proceeds():
     rep = run([
         trade("Stocks", "XYZ", "2025-08-01, 10:00:00", 100, -5000, 0, code="O"),
