@@ -398,28 +398,60 @@ class Options:
 
 def _normalize_symbol_renames(stmt: Statement) -> list[str]:
     """Unify symbols renamed mid-period (e.g. ticker changes) using the
-    Financial Instrument Information conid mapping."""
+    Financial Instrument Information conid mapping.
+
+    Option contracts are renamed too, but never show up as two symbols against
+    one conid: an option keeps its own conid across an underlying rename, so
+    the instrument info lists it under one name only while the trade rows
+    switch mid-life ("SATS 02JUL26 110 P" opens, "ECHO 02JUL26 110 P" closes).
+    Left alone the opening leg never matches and the close falls back to
+    IBKR's realized P/L while the open leg is still carried as a written
+    position at 30 June — the same premium counted twice, in both directions.
+    So the ticker renames established at stock level are also applied to the
+    underlying token of every option symbol seen in the statement."""
     notes = []
     rename: dict[str, str] = {}
     for conid, syms in stmt.conid_symbols.items():
         if len(syms) < 2:
             continue
-        last_seen: dict[str, datetime] = {}
-        for t in stmt.trades:
-            if t.symbol in syms:
-                last_seen[t.symbol] = t.dt
-        open_syms = {p.symbol for p in stmt.open_positions}
-        current = None
-        for s in syms:
-            if s in open_syms:
-                current = s
-        if current is None and last_seen:
-            current = max(last_seen, key=lambda s: last_seen[s])
-        if current is None:
-            current = syms[-1]
+        # The instrument info names the current symbol outright; everything
+        # below is a fallback for statements that leave the column empty.
+        current = stmt.conid_current.get(conid)
+        if current not in syms:
+            last_seen: dict[str, datetime] = {}
+            for t in stmt.trades:
+                # An option trade dates its underlying too — for a ticker held
+                # only through options that is the only signal available.
+                for s in {t.symbol, t.symbol.partition(" ")[0]} & set(syms):
+                    if t.dt > last_seen.get(s, datetime.min):
+                        last_seen[s] = t.dt
+            open_syms = {p.symbol for p in stmt.open_positions}
+            open_syms |= {p.symbol.partition(" ")[0] for p in stmt.open_positions}
+            current = None
+            for s in syms:
+                if s in open_syms:
+                    current = s
+            if current is None and last_seen:
+                current = max(last_seen, key=lambda s: last_seen[s])
+            if current is None:
+                current = syms[-1]
         for s in syms:
             if s != current:
                 rename[s] = current
+    # An option's own conid survives a rename of its underlying, so the loop
+    # above cannot see these; re-point them using the ticker renames it found.
+    underlying_rename = {old: new for old, new in rename.items()
+                         if " " not in old and " " not in new}
+    if underlying_rename:
+        option_symbols = {t.symbol for t in stmt.trades
+                          if t.category == "Equity and Index Options"}
+        option_symbols |= {p.symbol for p in stmt.open_positions
+                           if p.category == "Equity and Index Options"}
+        for sym in option_symbols:
+            root, sep, rest = sym.partition(" ")
+            if sep and root in underlying_rename:
+                rename.setdefault(sym, f"{underlying_rename[root]} {rest}")
+
     if rename:
         for t in stmt.trades:
             if t.symbol in rename:
