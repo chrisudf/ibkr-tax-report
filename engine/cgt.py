@@ -670,6 +670,23 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
                     f"{m.symbol}: written {od}, closed {cd} (next FY) — D2 gain stays in "
                     f"{fy_label(opts.fy_end_year)}; close leg is a capital loss in "
                     f"{fy_label(fy_of(cd))}")
+    # Written in-FY but assigned/exercised AFTER fy_end: s 104-40(5) disregards
+    # the D2 gain, so there is correctly nothing to return this year. The
+    # contract was still open at 30 June though, so without a note its absence
+    # from the D2 list silently disagrees with the year-end position snapshot.
+    d2_later_assigned = []
+    for tr in res.transfers:
+        od, td = tr.option_open_dt.date(), tr.dt.date()
+        if fy_start <= od <= fy_end and td > fy_end:
+            prem_aud, _ = fx.to_aud(tr.cash, tr.currency, od)
+            d2_later_assigned.append(
+                f"{tr.option_symbol}: written {od}, still open at {fy_end}, {tr.kind} on "
+                f"{td} (next FY) — the A${prem_aud:,.2f} D2 gain is disregarded "
+                f"(s 104-40(5)) and is NOT returned in {fy_label(opts.fy_end_year)}; "
+                f"premium folded into the {tr.stock_symbol or '(unmatched)'} parcel "
+                f"acquired {td}. No amendment arises if this return is lodged after the "
+                f"{tr.kind}.")
+
     # Transfers that cancel a prior-year D2 -> amendment flags
     amendment_flags = []
     for tr in res.transfers:
@@ -828,7 +845,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
         carry_forward=carry_rows,
         unmatched=unmatched_rows,
         amendment_flags=amendment_flags,
-        cross_year_notes=prior_written_notes + d2_later_closed,
+        cross_year_notes=prior_written_notes + d2_later_closed + d2_later_assigned,
         other_income=dict(dividends=div_rows, withholding_tax=wht_rows, interest=int_rows,
                           fees=fee_rows, borrow_fees=bor_rows, forex_pl=fxp_rows),
         reconciliation=dict(
