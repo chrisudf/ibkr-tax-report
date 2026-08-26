@@ -96,6 +96,7 @@ class Statement:
     borrow_fees: list[CashItem] = field(default_factory=list)
     forex_pl: list[CashItem] = field(default_factory=list)   # Div 775 ordinary income items
     conid_symbols: dict[str, list[str]] = field(default_factory=dict)  # conid -> symbols seen
+    conid_current: dict[str, str] = field(default_factory=dict)        # conid -> current symbol
     code_legend: dict[str, str] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
@@ -328,6 +329,14 @@ def parse_statement(content: str | bytes, source_name: str = "statement.csv") ->
                 for s in syms:
                     if s not in bucket:
                         bucket.append(s)
+                # For a renamed instrument IBKR lists both names in Symbol, in no
+                # dependable order ("ECHO, SATS" but "SATG, ECHX"); the Underlying
+                # column carries the current one. Guarded by the membership test
+                # because on an option row Underlying is the underlying ticker,
+                # not that contract's own symbol.
+                underlying = sec.get(row, "Underlying").strip()
+                if underlying in bucket:
+                    stmt.conid_current[conid] = underlying
 
         elif sec_name == "Codes":
             for k_col, m_col in (("Code", "Meaning"), ("Code (Cont.)", "Meaning (Cont.)")):
@@ -377,6 +386,7 @@ def merge_statements(stmts: list[Statement]) -> Statement:
             for sym in syms:
                 if sym not in bucket:
                     bucket.append(sym)
+        out.conid_current.update(s.conid_current)
 
     def dedupe(key_of, lists: list[list]) -> list:
         counts: list[Counter] = [Counter(key_of(x) for x in lst) for lst in lists]
