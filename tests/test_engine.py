@@ -4,7 +4,7 @@ import datetime as dt
 
 import pytest
 
-from demo.make_demo import OPT, opos, statement, trade
+from demo.make_demo import OPT, instrument, opos, statement, trade
 from engine.cgt import (Options, compute_tax_report, detect_fy, fy_label, fy_of,
                         held_12_months, parse_option_symbol)
 from engine.fx import RbaRates
@@ -145,6 +145,41 @@ def test_assignment_of_prior_year_written_flags_amendment():
     assert "FY2024-25" in rep["amendment_flags"][0]
 
 
+def test_assignment_after_fy_end_is_noted_not_returned_as_d2():
+    """Written in-FY, assigned in the next one: s 104-40(5) disregards the D2
+    gain, so nothing is returned — but the contract was open at 30 June and its
+    absence from the D2 list has to be explained, or the list silently
+    disagrees with the year-end position snapshot."""
+    rep = run([
+        trade(OPT, "ECHO 02JUL26 115 P", "2026-06-05, 10:00:00", -1, 906, -1, code="O"),
+        trade(OPT, "ECHO 02JUL26 115 P", "2026-07-02, 06:20:00", 1, 0, 0, code="A;C"),
+        trade("Stocks", "ECHO", "2026-07-02, 06:20:00", 100, -11500, 0, code="A;O"),
+    ], period="July 1, 2025 - August 14, 2026")
+    assert rep["summary"]["d2_open_written"] == 0.0
+    assert rep["d2_open"] == []
+    assert rep["amendment_flags"] == []        # return not lodged yet: nothing to amend
+    assert rep["transfers"] == []              # the fold itself lands in the next FY
+    note = [n for n in rep["cross_year_notes"] if n.startswith("ECHO 02JUL26 115 P")]
+    assert len(note) == 1
+    assert "104-40(5)" in note[0]
+    assert "assignment on 2026-07-02" in note[0]
+    assert "still open at 2026-06-30" in note[0]
+
+
+def test_buyback_after_fy_end_keeps_d2_unlike_assignment():
+    """The mirror case: a buy-back is not an exercise, so s 104-40(5) does not
+    apply and the D2 gain stays in the year the option was written."""
+    rep = run([
+        trade(OPT, "ECHO 02JUL26 110 P", "2026-06-15, 10:00:00", -1, 552, -1, code="O"),
+        trade(OPT, "ECHO 02JUL26 110 P", "2026-07-03, 10:00:00", 1, -300, -1, code="C"),
+    ], period="July 1, 2025 - August 14, 2026")
+    assert len(rep["d2_open"]) == 1
+    assert rep["d2_open"][0]["symbol"] == "ECHO 02JUL26 110 P"
+    note = [n for n in rep["cross_year_notes"] if n.startswith("ECHO 02JUL26 110 P")]
+    assert len(note) == 1
+    assert "capital loss in FY2026-27" in note[0]
+
+
 def test_short_call_assignment_adds_premium_to_stock_proceeds():
     rep = run([
         trade("Stocks", "XYZ", "2025-08-01, 10:00:00", 100, -5000, 0, code="O"),
@@ -196,6 +231,75 @@ def test_option_split_renames_contract():
     assert len(rep["d2_open"]) == 1
     assert rep["d2_open"][0]["symbol"] == "NVDL 17JUL26 26.67 P"
     assert rep["d2_open"][0]["qty"] == -3
+
+
+def test_ticker_rename_unified_via_conid():
+    info = [instrument("Stocks", "ECHO, SATS", "47965865")]
+    rep = run([
+        trade("Stocks", "SATS", "2025-08-01, 10:00:00", 10, -1000, -1, code="O"),
+        trade("Stocks", "ECHO", "2026-02-01, 10:00:00", -10, 1500, -1, code="C"),
+    ], instrument_info=info)
+    assert len(rep["closed_lots"]) == 1
+    assert rep["closed_lots"][0]["symbol"] == "ECHO"
+    assert not rep["unmatched"]
+    assert any("SATS -> ECHO" in n for n in rep["warnings"])
+
+
+def test_rename_direction_comes_from_underlying_not_list_order():
+    """IBKR pairs the two names in Symbol in no dependable order — the same
+    statement carries both "ECHO, SATS" and "SATG, ECHX". Underlying decides."""
+    for symbols, old, new in (("ECHO, SATS", "SATS", "ECHO"),
+                              ("SATG, ECHX", "SATG", "ECHX")):
+        info = [instrument("Stocks", symbols, "47965865", underlying=new)]
+        rep = run([
+            trade("Stocks", old, "2025-08-01, 10:00:00", 10, -1000, -1, code="O"),
+            trade("Stocks", new, "2026-02-01, 10:00:00", -10, 1500, -1, code="C"),
+        ], instrument_info=info)
+        assert rep["closed_lots"][0]["symbol"] == new
+        assert not rep["unmatched"]
+
+
+def test_option_underlying_rename_matches_open_and_close():
+    """An option keeps its own conid across a rename of the underlying, so the
+    instrument info never pairs the two names. Without re-pointing the option
+    symbol the open leg is left carried as a written position at 30 June while
+    the close falls back to IBKR's realized P/L — the premium counted twice."""
+    info = [instrument("Stocks", "ECHO, SATS", "47965865", underlying="ECHO"),
+            instrument(OPT, "SATS  260702P00110000", "885851383", underlying="SATS")]
+    rep = run([
+        trade(OPT, "SATS 02JUL26 110 P", "2026-06-15, 10:00:00", -1, 552, -1, code="O"),
+        trade(OPT, "ECHO 02JUL26 110 P", "2026-06-27, 10:00:00", 1, -1189, -1,
+              basis="551.74", rpl="-637.51", code="C"),
+    ], instrument_info=info)
+    assert not rep["unmatched"]
+    assert not rep["d2_open"]
+    lots = rep["closed_lots"]
+    assert len(lots) == 1
+    assert lots[0]["symbol"] == "ECHO 02JUL26 110 P"
+    # premium in less buy-back out, each leg on its own date: a net loss
+    assert lots[0]["gain_native"] == pytest.approx(552 - 1189 - 2)
+    assert lots[0]["gain_aud"] < 0
+
+
+def test_option_underlying_rename_keeps_open_position_as_d2():
+    """The same re-pointing must not swallow a contract that is still open at
+    30 June — it stays a D2 written position, just under the new name."""
+    info = [instrument("Stocks", "ECHO, SATS", "47965865", underlying="ECHO"),
+            instrument(OPT, "SATS  260702P00115000", "885851445", underlying="SATS")]
+    rep = run([
+        trade(OPT, "SATS 02JUL26 115 P", "2026-06-05, 10:00:00", -1, 906, -1, code="O"),
+    ], instrument_info=info)
+    assert len(rep["d2_open"]) == 1
+    assert rep["d2_open"][0]["symbol"] == "ECHO 02JUL26 115 P"
+    assert rep["d2_open"][0]["qty"] == -1
+
+
+def test_ticker_rename_leaves_unrelated_options_alone():
+    info = [instrument("Stocks", "ECHO, SATS", "47965865", underlying="ECHO")]
+    rep = run([
+        trade(OPT, "NVDA 02JUL26 185 P", "2026-06-11, 10:00:00", -1, 400, -1, code="O"),
+    ], instrument_info=info)
+    assert rep["d2_open"][0]["symbol"] == "NVDA 02JUL26 185 P"
 
 
 def test_unknown_corporate_action_warns():
