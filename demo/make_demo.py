@@ -27,7 +27,7 @@ def trade(cat, sym, dt, qty, proceeds, comm, basis="", rpl="", code=""):
 
 
 def statement(period, when, trades, open_positions=(), corporate_actions=(),
-              dividends=(), wht=(), interest=(), fees=()):
+              dividends=(), wht=(), interest=(), fees=(), instrument_info=()):
     rows = [
         ["Statement", "Header", "Field Name", "Field Value"],
         ["Statement", "Data", "BrokerName", "Interactive Brokers Australia Pty Ltd. (DEMO)"],
@@ -59,6 +59,11 @@ def statement(period, when, trades, open_positions=(), corporate_actions=(),
         rows.append(["Fees", "Header", "Subtitle", "Currency", "Date", "Description",
                      "Amount"])
         rows.extend(fees)
+    if instrument_info:
+        rows.append(["Financial Instrument Information", "Header", "Asset Category",
+                     "Symbol", "Description", "Conid", "Security ID", "Underlying",
+                     "Listing Exch", "Multiplier", "Type", "Code"])
+        rows.extend(instrument_info)
     rows += [
         ["Codes", "Header", "Code", "Meaning"],
         ["Codes", "Data", "A", "Assignment"],
@@ -77,6 +82,13 @@ def statement(period, when, trades, open_positions=(), corporate_actions=(),
 def opos(cat, sym, qty, basis):
     return ["Open Positions", "Data", "Summary", cat, "USD", sym, qty, "", "", basis,
             "", "", "", ""]
+
+
+def instrument(cat, symbols, conid, underlying=""):
+    """Financial Instrument Information row. `symbols` is what IBKR lists for the
+    conid — a comma-joined pair when the instrument was renamed mid-period."""
+    return ["Financial Instrument Information", "Data", cat, symbols, "", conid, "",
+            underlying, "NASDAQ", 1, "COMMON", ""]
 
 
 OPT = "Equity and Index Options"

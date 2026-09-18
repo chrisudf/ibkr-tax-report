@@ -398,28 +398,60 @@ class Options:
 
 def _normalize_symbol_renames(stmt: Statement) -> list[str]:
     """Unify symbols renamed mid-period (e.g. ticker changes) using the
-    Financial Instrument Information conid mapping."""
+    Financial Instrument Information conid mapping.
+
+    Option contracts are renamed too, but never show up as two symbols against
+    one conid: an option keeps its own conid across an underlying rename, so
+    the instrument info lists it under one name only while the trade rows
+    switch mid-life ("SATS 02JUL26 110 P" opens, "ECHO 02JUL26 110 P" closes).
+    Left alone the opening leg never matches and the close falls back to
+    IBKR's realized P/L while the open leg is still carried as a written
+    position at 30 June — the same premium counted twice, in both directions.
+    So the ticker renames established at stock level are also applied to the
+    underlying token of every option symbol seen in the statement."""
     notes = []
     rename: dict[str, str] = {}
     for conid, syms in stmt.conid_symbols.items():
         if len(syms) < 2:
             continue
-        last_seen: dict[str, datetime] = {}
-        for t in stmt.trades:
-            if t.symbol in syms:
-                last_seen[t.symbol] = t.dt
-        open_syms = {p.symbol for p in stmt.open_positions}
-        current = None
-        for s in syms:
-            if s in open_syms:
-                current = s
-        if current is None and last_seen:
-            current = max(last_seen, key=lambda s: last_seen[s])
-        if current is None:
-            current = syms[-1]
+        # The instrument info names the current symbol outright; everything
+        # below is a fallback for statements that leave the column empty.
+        current = stmt.conid_current.get(conid)
+        if current not in syms:
+            last_seen: dict[str, datetime] = {}
+            for t in stmt.trades:
+                # An option trade dates its underlying too — for a ticker held
+                # only through options that is the only signal available.
+                for s in {t.symbol, t.symbol.partition(" ")[0]} & set(syms):
+                    if t.dt > last_seen.get(s, datetime.min):
+                        last_seen[s] = t.dt
+            open_syms = {p.symbol for p in stmt.open_positions}
+            open_syms |= {p.symbol.partition(" ")[0] for p in stmt.open_positions}
+            current = None
+            for s in syms:
+                if s in open_syms:
+                    current = s
+            if current is None and last_seen:
+                current = max(last_seen, key=lambda s: last_seen[s])
+            if current is None:
+                current = syms[-1]
         for s in syms:
             if s != current:
                 rename[s] = current
+    # An option's own conid survives a rename of its underlying, so the loop
+    # above cannot see these; re-point them using the ticker renames it found.
+    underlying_rename = {old: new for old, new in rename.items()
+                         if " " not in old and " " not in new}
+    if underlying_rename:
+        option_symbols = {t.symbol for t in stmt.trades
+                          if t.category == "Equity and Index Options"}
+        option_symbols |= {p.symbol for p in stmt.open_positions
+                           if p.category == "Equity and Index Options"}
+        for sym in option_symbols:
+            root, sep, rest = sym.partition(" ")
+            if sep and root in underlying_rename:
+                rename.setdefault(sym, f"{underlying_rename[root]} {rest}")
+
     if rename:
         for t in stmt.trades:
             if t.symbol in rename:
@@ -638,6 +670,23 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
                     f"{m.symbol}: written {od}, closed {cd} (next FY) — D2 gain stays in "
                     f"{fy_label(opts.fy_end_year)}; close leg is a capital loss in "
                     f"{fy_label(fy_of(cd))}")
+    # Written in-FY but assigned/exercised AFTER fy_end: s 104-40(5) disregards
+    # the D2 gain, so there is correctly nothing to return this year. The
+    # contract was still open at 30 June though, so without a note its absence
+    # from the D2 list silently disagrees with the year-end position snapshot.
+    d2_later_assigned = []
+    for tr in res.transfers:
+        od, td = tr.option_open_dt.date(), tr.dt.date()
+        if fy_start <= od <= fy_end and td > fy_end:
+            prem_aud, _ = fx.to_aud(tr.cash, tr.currency, od)
+            d2_later_assigned.append(
+                f"{tr.option_symbol}: written {od}, still open at {fy_end}, {tr.kind} on "
+                f"{td} (next FY) — the A${prem_aud:,.2f} D2 gain is disregarded "
+                f"(s 104-40(5)) and is NOT returned in {fy_label(opts.fy_end_year)}; "
+                f"premium folded into the {tr.stock_symbol or '(unmatched)'} parcel "
+                f"acquired {td}. No amendment arises if this return is lodged after the "
+                f"{tr.kind}.")
+
     # Transfers that cancel a prior-year D2 -> amendment flags
     amendment_flags = []
     for tr in res.transfers:
@@ -796,7 +845,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
         carry_forward=carry_rows,
         unmatched=unmatched_rows,
         amendment_flags=amendment_flags,
-        cross_year_notes=prior_written_notes + d2_later_closed,
+        cross_year_notes=prior_written_notes + d2_later_closed + d2_later_assigned,
         other_income=dict(dividends=div_rows, withholding_tax=wht_rows, interest=int_rows,
                           fees=fee_rows, borrow_fees=bor_rows, forex_pl=fxp_rows),
         reconciliation=dict(
