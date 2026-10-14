@@ -485,6 +485,27 @@ def test_non_ibkr_csv_rejected():
         parse_statement("name,age\nalice,3\n", "junk.csv")
 
 
+def test_binary_upload_rejected_by_content():
+    with pytest.raises(ParseError, match="is a binary file, not a CSV"):
+        parse_statement(b"Statement,Header\x00\x00\x01\x02", "odd.csv")
+
+
+def test_utf16_resave_still_parses():
+    """Excel's "Unicode text" save is UTF-16 with a BOM — still the same CSV."""
+    text = statement("July 1, 2025 - June 30, 2026", "x", trades=list(ENTITY_CASE[1:]))
+    st = parse_statement(text.encode("utf-16"), "resaved.csv")
+    assert len(st.trades) == 1 and st.account == "U9999999"
+
+
+def test_bad_value_in_statement_names_file_and_line():
+    text = statement("July 1, 2025 - June 30, 2026", "x", trades=[],
+                     dividends=[["Dividends", "Data", "USD", "2025-11-14", "XYZ", "n/a"]])
+    line = text.splitlines().index(next(l for l in text.splitlines()
+                                        if l.startswith("Dividends,Data"))) + 1
+    with pytest.raises(ParseError, match=f"x.csv: unexpected value on line {line}"):
+        parse_statement(text, "x.csv")
+
+
 # ---------------------------------------------------------------- outputs
 
 def test_csv_injection_guarded():

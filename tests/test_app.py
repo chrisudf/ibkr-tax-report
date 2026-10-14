@@ -63,6 +63,44 @@ def test_analyze_rejects_junk(client):
     assert "IBKR" in r.get_json()["error"]
 
 
+def _post_one(client, content, name):
+    return client.post("/api/analyze", data={"files": (io.BytesIO(content), name)},
+                       content_type="multipart/form-data")
+
+
+@pytest.mark.parametrize("content,name,kind", [
+    (b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n1 0 obj\r<< /Type /Catalog >>\rendobj\n", "U9999999.pdf",
+     "is a PDF"),
+    # renamed: the content decides, not the extension
+    (b"%PDF-1.4\n1 0 obj\r<<>>\rendobj\n", "U9999999.csv", "is a PDF"),
+    (b"PK\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00!\x00", "statement.xlsx", "Excel workbook"),
+    (b"PK\x03\x04\x14\x00\x00\x00\x08\x00", "statements.zip", "extract them"),
+    (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1\x00\x00", "statement.xls", "legacy Excel"),
+    (b"<!DOCTYPE html><html><body>Activity Statement</body></html>", "statement.htm",
+     "HTML page"),
+])
+def test_non_csv_upload_gets_a_clear_message(client, content, name, kind):
+    r = _post_one(client, content, name)
+    assert r.status_code == 422
+    err = r.get_json()["error"]
+    assert kind in err
+    assert name in err
+    assert "CSV as the format" in err                 # says what to do instead
+    assert "new-line character" not in err
+
+
+def test_malformed_csv_error_is_wrapped(client):
+    # a bare carriage return inside a field: csv raises "new-line character seen
+    # in unquoted field", which on its own tells the user nothing
+    bad = (b"Statement,Header,Field Name,Field Value\n"
+           b"Statement,Data,Title,Activity\rStatement\n")
+    r = _post_one(client, bad, "statement.csv")
+    assert r.status_code == 422
+    err = r.get_json()["error"]
+    assert err.startswith("statement.csv could not be read as a CSV file (line")
+    assert "re-saving it in Excel" in err and "CSV as the format" in err
+
+
 def test_analyze_requires_files(client):
     r = client.post("/api/analyze", data={}, content_type="multipart/form-data")
     assert r.status_code == 400

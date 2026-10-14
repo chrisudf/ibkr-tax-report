@@ -42,7 +42,10 @@ function renderFiles() {
 function addFiles(list) {
   for (const f of list) {
     if (!/\.csv$/i.test(f.name)) {
-      showError(`${f.name}: only IBKR CSV exports are supported`);
+      showError(`${f.name} is not a CSV file. This tool reads only the CSV export of an IBKR ` +
+        `Activity Statement or Realized Summary, not the PDF, HTML or Excel versions. Run the ` +
+        `statement again in the IBKR portal with CSV as the format and add that file ` +
+        `(see "Exporting from IBKR" in the README).`);
       continue;
     }
     if (!files.some((x) => x.name === f.name && x.size === f.size)) files.push(f);

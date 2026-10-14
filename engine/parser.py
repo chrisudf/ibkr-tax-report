@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import csv
 import io
+import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -183,14 +184,66 @@ class _Section:
         return name in self.cols
 
 
+_EXPORT_HINT = ("This tool reads the CSV export of an IBKR Activity Statement or Realized "
+                "Summary. Run the statement again in the IBKR portal with CSV as the format and "
+                "upload that file as downloaded (see 'Exporting from IBKR' in the README).")
+
+# Formats people reach for first. Checked by content, so a renamed file is caught too;
+# the extension only refines the wording and backs up the check.
+_MAGIC = ((b"%PDF-", "a PDF"),
+          (b"PK\x03\x04", "a ZIP container (an Excel .xlsx workbook or a .zip archive)"),
+          (b"\xd0\xcf\x11\xe0", "a legacy Excel .xls workbook"))
+_EXT_KIND = {".pdf": "a PDF", ".xlsx": "an Excel workbook", ".xlsm": "an Excel workbook",
+             ".xls": "a legacy Excel .xls workbook", ".zip": "a .zip archive",
+             ".html": "an HTML page", ".htm": "an HTML page", ".docx": "a Word document"}
+
+
+def _decode(content: bytes, source_name: str) -> str:
+    """Bytes of an upload -> text, refusing anything that is plainly not a CSV
+    with a message that says what the file is and what to upload instead."""
+    ext = os.path.splitext(source_name)[1].lower()
+    kind = next((k for magic, k in _MAGIC if content.startswith(magic)), None)
+    if kind and kind.startswith("a ZIP") and ext in _EXT_KIND:
+        kind = _EXT_KIND[ext]
+    if kind is None and content[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return content.decode("utf-16")       # re-saved as "Unicode text"; still a CSV
+    lead = content[:512].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+    if kind is None and lead.startswith((b"<!doctype html", b"<html")):
+        kind = "an HTML page"
+    if kind is None and b"\x00" in content[:4096]:
+        kind = "a binary file"
+    if kind is None:
+        kind = _EXT_KIND.get(ext)
+    if kind:
+        extra = (" If it holds CSV statements, extract them and upload those."
+                 if "zip" in kind else "")
+        raise ParseError(f"{source_name} is {kind}, not a CSV file.{extra} {_EXPORT_HINT}")
+    return content.decode("utf-8-sig", errors="replace")
+
+
 def parse_statement(content: str | bytes, source_name: str = "statement.csv") -> Statement:
     if isinstance(content, bytes):
-        content = content.decode("utf-8-sig", errors="replace")
+        content = _decode(content, source_name)
+    reader = csv.reader(io.StringIO(content))
+    try:
+        return _parse_rows(reader, source_name)
+    except csv.Error as e:
+        raise ParseError(
+            f"{source_name} could not be read as a CSV file (line {reader.line_num}: {e}). "
+            "Upload it exactly as IBKR exported it — opening and re-saving it in Excel can "
+            f"change its layout. {_EXPORT_HINT}") from e
+    except (ValueError, IndexError) as e:
+        raise ParseError(
+            f"{source_name}: unexpected value on line {reader.line_num} ({e}) — this does not "
+            f"read as an unmodified IBKR statement export. {_EXPORT_HINT}") from e
+
+
+def _parse_rows(reader, source_name: str) -> Statement:
     stmt = Statement(source_name=source_name)
     sections: dict[str, _Section] = {}
     saw_statement_section = False
 
-    for row in csv.reader(io.StringIO(content)):
+    for row in reader:
         if len(row) < 2:
             continue
         sec_name, row_type = row[0], row[1]
@@ -347,7 +400,7 @@ def parse_statement(content: str | bytes, source_name: str = "statement.csv") ->
     if not saw_statement_section:
         raise ParseError(
             f"{source_name}: no 'Statement' section found — this does not look like an "
-            "IBKR Activity Statement / Realized Summary CSV export.")
+            f"IBKR Activity Statement / Realized Summary CSV export. {_EXPORT_HINT}")
     if not stmt.trades and not stmt.dividends and not stmt.interest:
         stmt.warnings.append(f"{source_name}: statement contains no trades or income rows.")
     stmt.trades.sort(key=lambda t: t.dt)  # csv.reader preserves file order for ties
