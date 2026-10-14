@@ -20,9 +20,10 @@
     <div id="dropzone" tabindex="0" role="button" aria-label="Upload IBKR CSV statements">
       <div class="dz-icon">&#8681;</div>
       <div class="dz-title">Drop IBKR statement CSVs here</div>
-      <div class="dz-sub">or <span class="link">browse files</span> — annual Activity Statement,
-        plus the Realized Summary export if you have it (adds FX P/L detail).
-        Multiple consecutive years improve FIFO accuracy.</div>
+      <div class="dz-sub">or <span class="link">browse files</span> — CSV exports only: the
+        1 July – 30 June Activity Statement, the Realized Summary for the same year (FX P/L),
+        and an Activity Statement running past 30 June (what happened to options open at
+        year end). Earlier years add FIFO history.</div>
       <input type="file" id="file-input" accept=".csv,text/csv" multiple hidden>
     </div>
     <ul id="file-list"></ul>
