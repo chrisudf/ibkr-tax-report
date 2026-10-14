@@ -124,8 +124,8 @@ bundled copy of RBA table F11.1. Its date range is a **hard limit**:
   within 10 days.
 - So the table must reach the **end date of your latest file** — usually file
   (c) — and go back to the purchase date of the **oldest parcel** involved.
-- The bundled table covers **3 January 2023 – 17 August 2026** (RBA publication
-  of 17 August 2026). The RBA's current F11.1 file starts in 2023; parcels
+- The bundled table covers **3 January 2023 – 14 October 2026** (RBA publication
+  of 14 October 2026). The RBA's current F11.1 file starts in 2023; parcels
   acquired earlier cannot be translated yet (see Limitations).
 
 Refresh it from the RBA when your files run past its last date:
