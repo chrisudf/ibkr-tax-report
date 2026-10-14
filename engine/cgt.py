@@ -494,14 +494,18 @@ def _d2_outcome_warning(unresolved: list, data_end: date | None, fy_end: date) -
            "by up to that premium.")
     if later:
         last = max((u[2] for u in later if u[2]), default=None)
-        msg += (" To resolve: also upload an Activity Statement CSV whose period runs past "
-                f"30 June{f' and ends after {last}' if last else ''} (the post-year-end "
-                "statement; overlapping periods are de-duplicated). For a contract that has not "
-                "expired yet the strict figure stands, and a later assignment or exercise means "
-                "amending this return.")
+        # It must also START by 1 July: an outcome row dated before the file begins
+        # is missing however late the file ends.
+        msg += (" To resolve: also upload an Activity Statement CSV that starts on or before "
+                f"{fy_end + timedelta(days=1)} and ends after "
+                f"{last or 'the latest expiry'} (the post-year-end statement; overlapping "
+                "periods are de-duplicated). For a contract that has not expired yet the "
+                "strict figure stands, and a later assignment or exercise means amending this "
+                "return.")
     if stale:
         msg += (f" The data runs past the expiry of {', '.join(u[0] for u in stale)} yet shows "
-                "no close, expiry or assignment for it — check the statements are complete.")
+                "no close, expiry or assignment for it — check the statements are complete "
+                "and leave no gap after 30 June.")
     return msg
 
 

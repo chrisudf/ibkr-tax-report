@@ -206,7 +206,11 @@ def _decode(content: bytes, source_name: str) -> str:
     if kind and kind.startswith("a ZIP") and ext in _EXT_KIND:
         kind = _EXT_KIND[ext]
     if kind is None and content[:2] in (b"\xff\xfe", b"\xfe\xff"):
-        return content.decode("utf-16")       # re-saved as "Unicode text"; still a CSV
+        try:
+            return content.decode("utf-16")   # re-saved as "Unicode text"; still a CSV
+        except UnicodeDecodeError as e:
+            raise ParseError(f"{source_name} starts like a UTF-16 text file but cannot be "
+                             f"decoded ({e.reason}) — it may be truncated. {_EXPORT_HINT}") from e
     lead = content[:512].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
     if kind is None and lead.startswith((b"<!doctype html", b"<html")):
         kind = "an HTML page"

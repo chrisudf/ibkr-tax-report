@@ -201,7 +201,7 @@ def test_d2_open_without_post_fy_data_warns_but_keeps_strict_total():
     assert "ECHO 02JUL26 115 P (written 2026-06-05, expires 2026-07-02" in w[0]
     assert f"A${prem:,.2f}" in w[0]
     assert "104-40(5)" in w[0]
-    assert "ends after 2026-07-02" in w[0]                        # which file fixes it
+    assert "starts on or before 2026-07-01 and ends after 2026-07-02" in w[0]  # the fix
     text = build_workpaper_csv(rep)
     assert "NOT in uploaded data" in text
     assert "D2 OUTCOME NOT IN UPLOADED DATA" in text
@@ -241,6 +241,22 @@ def test_d2_post_fy_data_past_expiry_shows_outcome_no_warning():
     assert fates == {"ECHO 02JUL26 110 P": "closed 2026-07-01",
                      "NVDA 17JUL26 100 P": "expired 2026-07-17"}
     assert "NOT in uploaded data" not in build_workpaper_csv(rep)
+
+
+def test_d2_post_fy_file_starting_after_the_assignment_still_warns():
+    """A post-year-end statement that starts after the July assignment cannot show
+    it, however late it ends — the lot stays open and the run must say so."""
+    fy = statement("July 1, 2025 - June 30, 2026", "2026-07-05, 09:00:00 AEST", trades=[
+        trade(OPT, "ECHO 02JUL26 115 P", "2026-06-05, 10:00:00", -1, 906, -1, code="O")])
+    late = statement("July 15, 2026 - August 14, 2026", "2026-08-15, 09:00:00 AEST",
+                     trades=[])
+    merged = merge_statements([parse_statement(fy, "fy.csv"), parse_statement(late, "c.csv")])
+    rep = compute_tax_report(merged, Options(fy_end_year=2026), FX)
+    w = _d2_warnings(rep)
+    assert len(w) == 1
+    assert "runs past the expiry of ECHO 02JUL26 115 P" in w[0]
+    assert "no gap after 30 June" in w[0]
+    assert rep["summary"]["d2_outcome_unknown"] == rep["summary"]["d2_open_written"]
 
 
 def test_d2_post_fy_data_ending_before_expiry_still_warns():
@@ -495,6 +511,13 @@ def test_utf16_resave_still_parses():
     text = statement("July 1, 2025 - June 30, 2026", "x", trades=list(ENTITY_CASE[1:]))
     st = parse_statement(text.encode("utf-16"), "resaved.csv")
     assert len(st.trades) == 1 and st.account == "U9999999"
+
+
+def test_truncated_utf16_is_a_parse_error_not_a_traceback():
+    # BOM plus an odd number of bytes: the codec raises UnicodeDecodeError,
+    # which the CLI would not catch
+    with pytest.raises(ParseError, match="broken.csv starts like a UTF-16 text file"):
+        parse_statement(b"\xff\xfeS\x00t", "broken.csv")
 
 
 def test_bad_value_in_statement_names_file_and_line():

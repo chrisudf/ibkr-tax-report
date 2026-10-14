@@ -29,7 +29,7 @@ not, and leaving one out changes the figures:
 |---|---|---|---|---|
 | **(a)** | **Activity Statement** for the year | 1 July – 30 June | Trades, open positions, dividends, interest, fees — the main data | Nothing to report on. |
 | **(b)** | **Realized Summary** for the same year | 1 July – 30 June | The only export with a **Forex P/L Details** section: realised FX gains and losses (Div 775 — ordinary income, not CGT) | Realised FX gains/losses are counted as **0**. The report warns about it. |
-| **(c)** | **Activity Statement that runs past 30 June** | Any start date; must **end after the expiry of every option you had written that was still open at 30 June** (e.g. 11 Nov – 14 Aug). Overlap with (a) is fine. | What happened to those options after year end: one assigned or exercised in July has its D2 gain disregarded (s 104-40(5)). Also its own **Financial Instrument Information** section — the conid mapping used to unify tickers renamed mid-life. | Every written option open at 30 June is taxed in full as a D2 gain (the strict view), including ones assigned in July — the net capital gain can be **overstated**. The report warns, naming each contract and its D2 amount. Not needed if no written options were open at 30 June. |
+| **(c)** | **Activity Statement that runs past 30 June** | Must **start on or before 1 July** and **end after the expiry of every option you had written that was still open at 30 June** (e.g. 11 Nov – 14 Aug). Overlap with (a) is fine; a gap after 30 June is not — an assignment dated before the file starts is simply missing. | What happened to those options after year end: one assigned or exercised in July has its D2 gain disregarded (s 104-40(5)). Also its own **Financial Instrument Information** section — the conid mapping used to unify tickers renamed mid-life. | Every written option open at 30 June is taxed in full as a D2 gain (the strict view), including ones assigned in July — the net capital gain can be **overstated**. The report warns, naming each contract and its D2 amount. Not needed if no written options were open at 30 June. |
 
 **(b) and (c) cannot stand in for each other.** The Realized Summary has no
 Financial Instrument Information section and stops at 30 June; activity
@@ -114,21 +114,25 @@ the run shows the D2 warning described under file (c).
 Every leg is translated at the RBA daily rate for its own date, from the
 bundled copy of RBA table F11.1. Its date range is a **hard limit**:
 
-- **Legs outside the reported year are translated too.** Positions still open
-  at the end of the uploaded data are carried forward at their acquisition-date
-  rate, and parcels sold in the year are costed at theirs — so a late trade in
-  file (c), or a parcel bought years ago, needs a rate as much as a trade in
-  the year does. A leg outside the table stops the whole run with
+- **What needs a rate is the date of every leg the run translates**, not the
+  statement period: trades and income inside the reported year, the purchase
+  date of every parcel sold in the year or still held at the end of the
+  uploaded data, and the write date of options taxed as D2. Legs outside the
+  year count too — a position opened late in file (c) and still held when it
+  ends, or a parcel bought years ago, needs a rate as much as a trade in the
+  year does. A leg outside the table stops the whole run with
   `no RBA USD rate within 10 days on or before <date>`. Rates are never
   extrapolated; weekends and holidays fall back to the latest published rate
   within 10 days.
-- So the table must reach the **end date of your latest file** — usually file
-  (c) — and go back to the purchase date of the **oldest parcel** involved.
+- A file whose period merely ends after the table's last date is fine as long
+  as none of those legs do. Keeping the table at least as recent as your latest
+  file's end date avoids having to check.
 - The bundled table covers **3 January 2023 – 14 October 2026** (RBA publication
   of 14 October 2026). The RBA's current F11.1 file starts in 2023; parcels
   acquired earlier cannot be translated yet (see Limitations).
 
-Refresh it from the RBA when your files run past its last date:
+Refresh it from the RBA when a leg falls after its last date — or simply
+whenever your files end after it:
 
 ```bash
 curl -o data/rba_f11.csv https://www.rba.gov.au/statistics/tables/csv/f11.1-data.csv
@@ -143,10 +147,10 @@ The report shows the coverage it used ("FX source") on every run.
 - **"… is a PDF, not a CSV file"** (or an Excel workbook, ZIP or HTML page).
   Run the statement again with CSV as the format — see
   [Exporting from IBKR](#exporting-from-ibkr).
-- **"D2 OUTCOME NOT IN UPLOADED DATA"** warning. Add file (c), ending after the
-  latest expiry the warning names. For a contract that has not expired yet the
-  strict figure stands; an assignment or exercise later means amending the
-  return.
+- **"D2 OUTCOME NOT IN UPLOADED DATA"** warning. Add file (c), starting on or
+  before 1 July and ending after the latest expiry the warning names. For a
+  contract that has not expired yet the strict figure stands; an assignment or
+  exercise later means amending the return.
 - **"no 'Forex P/L Details' section was found"** warning. Add file (b).
 - **`no RBA USD rate within 10 days on or before <date>`.** Refresh the rate
   table — see [RBA exchange rates](#rba-exchange-rates-datarba_f11csv).
