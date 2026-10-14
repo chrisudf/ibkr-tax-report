@@ -235,12 +235,16 @@ def build_pdf(report: dict) -> bytes:
     el.append(Spacer(1, 4 * mm))
 
     el.append(Paragraph("Headline figures (AUD)", styles["h2"]))
+    d2_unknown = ([("    of which: fate after 30 June not in uploaded data (see warnings)",
+                    s["d2_outcome_unknown"])]
+                  if s.get("d2_outcome_unknown") else [])
     el.append(_kv_table([
         ("Closed gains — discount-eligible", s["closed_gains_discountable"]),
         ("Closed gains — not discountable", s["closed_gains_nondiscountable"]),
         ("Closed losses", s["closed_losses"]),
         ("Closed parcels net", s["closed_net"]),
         ("D2: written options open at 30 June (premiums at grant date)", s["d2_open_written"]),
+        *d2_unknown,
         ("Current-year gains subtotal — strict ATO view", s["strict_subtotal"]),
         ("Prior-year losses carried in", s["carried_losses_input"]),
         ("Losses applied (non-discountable gains first)", s["losses_applied_total"]),

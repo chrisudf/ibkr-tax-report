@@ -14,7 +14,8 @@ Methodology (each point verified against ATO sources; see docs/TAX_RULES.md):
   (s 104-40(2)); D2 gains never qualify for the CGT discount (s 115-25(3)).
   Written options still open at the end of the financial year are therefore
   taxable in that year ("strict" view). A "deferred / closed-basis" alternative
-  total is also reported for comparison.
+  total is also reported for comparison. When the uploaded data stops before
+  their fate is known, the strict figure stands but a warning names them.
 - If a written option is later exercised/assigned, the D2 gain is disregarded
   (s 104-40(5)) and the premium is folded into the underlying share parcel
   (ss 134-1, 116-65): reduces cost base of shares bought under a put, increases
@@ -109,6 +110,16 @@ def parse_option_symbol(sym: str):
     if not m:
         return None
     return m.group("under"), m.group("exp"), float(m.group("strike")), m.group("right")
+
+
+def option_expiry(sym: str) -> date | None:
+    p = parse_option_symbol(sym)
+    if not p:
+        return None
+    try:
+        return datetime.strptime(p[1], "%d%b%y").date()
+    except ValueError:
+        return None
 
 
 def underlying_of(t: Trade) -> str:
@@ -464,6 +475,40 @@ def _normalize_symbol_renames(stmt: Statement) -> list[str]:
     return notes
 
 
+def _d2_outcome_warning(unresolved: list, data_end: date | None, fy_end: date) -> str:
+    """Warning for D2 premiums whose post-30-June fate the uploaded data cannot show.
+
+    unresolved: (symbol, write date, expiry or None, premium AUD) per open lot."""
+    total = sum(u[3] for u in unresolved)
+    items = "; ".join(f"{sym} (written {od}, expires {exp or 'unknown'}, D2 A${p:,.2f})"
+                      for sym, od, exp, p in unresolved)
+    # Ending ON the expiry date is not enough: the expiry/assignment row may be
+    # dated the next day depending on the statement's time zone.
+    later = [u for u in unresolved if u[2] is None or data_end is None or data_end <= u[2]]
+    stale = [u for u in unresolved if u not in later]
+    msg = (f"D2 OUTCOME NOT IN UPLOADED DATA — {len(unresolved)} written option(s) still open "
+           f"at {fy_end} are counted in full as D2 gains (A${total:,.2f}, strict view), but the "
+           f"uploaded data ends {data_end or 'at an unknown date'} and does not show what "
+           f"happened to them afterwards: {items}. If any was assigned or exercised after "
+           "30 June, s 104-40(5) disregards its D2 gain and the net capital gain is overstated "
+           "by up to that premium.")
+    if later:
+        last = max((u[2] for u in later if u[2]), default=None)
+        # It must also START by 1 July: an outcome row dated before the file begins
+        # is missing however late the file ends.
+        msg += (" To resolve: also upload an Activity Statement CSV that starts on or before "
+                f"{fy_end + timedelta(days=1)} and ends after "
+                f"{last or 'the latest expiry'} (the post-year-end statement; overlapping "
+                "periods are de-duplicated). For a contract that has not expired yet the "
+                "strict figure stands, and a later assignment or exercise means amending this "
+                "return.")
+    if stale:
+        msg += (f" The data runs past the expiry of {', '.join(u[0] for u in stale)} yet shows "
+                "no close, expiry or assignment for it — check the statements are complete "
+                "and leave no gap after 30 June.")
+    return msg
+
+
 def _sum_cash_aud(items, fx: RbaRates, window: tuple[date, date], dropped: dict):
     """Sum cash items falling inside the FY window, translated at each item's own date.
 
@@ -637,6 +682,11 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
 
     # ---------------- D2: written options open at FY end ----------------
     d2_rows, d2_total = [], 0.0
+    # Still on the books when the uploaded data runs out, so what happened after
+    # 30 June is not visible. An assignment or exercise would disregard the D2
+    # gain counted here (s 104-40(5)) — the strict total stays as computed, but
+    # it may be overstated and the run must say so.
+    d2_unresolved = []
     for (cat, sym), lots in sorted(res.books.items()):
         if cat != "Equity and Index Options":
             continue
@@ -652,9 +702,13 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
                 continue
             prem_aud, fxr = fx.to_aud(lot.cash, lot.currency, open_d)
             d2_total += prem_aud
+            expiry = option_expiry(sym)
             d2_rows.append(dict(symbol=sym, write_date=str(open_d), qty=round(lot.qty, 4),
                                 premium_native=round(lot.cash, 2), currency=lot.currency,
-                                fx=fxr, premium_aud=round(prem_aud, 2)))
+                                fx=fxr, premium_aud=round(prem_aud, 2),
+                                expires=str(expiry or ""),
+                                after_fy_end="NOT IN UPLOADED DATA"))
+            d2_unresolved.append((sym, open_d, expiry, prem_aud))
     # Written in-FY but closed AFTER fy_end (visible only with multi-year data):
     d2_later_closed = []
     for m in res.matches:
@@ -665,7 +719,9 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
                 d2_total += prem_aud
                 d2_rows.append(dict(symbol=m.symbol, write_date=str(od), qty=-round(m.qty, 4),
                                     premium_native=round(m.open_cash, 2), currency=m.currency,
-                                    fx=fxr, premium_aud=round(prem_aud, 2)))
+                                    fx=fxr, premium_aud=round(prem_aud, 2),
+                                    expires=str(option_expiry(m.symbol) or ""),
+                                    after_fy_end=f"{'expired' if m.via_expiry else 'closed'} {cd}"))
                 d2_later_closed.append(
                     f"{m.symbol}: written {od}, closed {cd} (next FY) — D2 gain stays in "
                     f"{fy_label(opts.fy_end_year)}; close leg is a capital loss in "
@@ -686,6 +742,9 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
                 f"premium folded into the {tr.stock_symbol or '(unmatched)'} parcel "
                 f"acquired {td}. No amendment arises if this return is lodged after the "
                 f"{tr.kind}.")
+    if d2_unresolved:
+        # First in the list: it is the one gap that changes the headline figure.
+        warnings.insert(0, _d2_outcome_warning(d2_unresolved, stmt.period_end, fy_end))
 
     # Transfers that cancel a prior-year D2 -> amendment flags
     amendment_flags = []
@@ -806,6 +865,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
         closed_losses=round(tot["losses"], 2),
         closed_net=round(tot["net"], 2),
         d2_open_written=round(d2_total, 2),
+        d2_outcome_unknown=round(sum(u[3] for u in d2_unresolved), 2),
         strict_subtotal=round(strict_subtotal, 2),
         deferred_alternative=round(tot["net"], 2),
         current_year_losses=round(losses_current, 2),

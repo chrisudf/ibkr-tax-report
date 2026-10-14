@@ -16,7 +16,7 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
-from engine import (Options, RbaRates, build_pdf, build_workpaper_csv, build_zip,
+from engine import (Options, ParseError, RbaRates, build_pdf, build_workpaper_csv, build_zip,
                     compute_tax_report, detect_fy, merge_statements, parse_statement)
 
 
@@ -33,10 +33,14 @@ def main() -> int:
     args = ap.parse_args()
 
     stmts = []
-    for p in args.files:
-        with open(p, "rb") as fh:
-            stmts.append(parse_statement(fh.read(), os.path.basename(p)))
-    merged = merge_statements(stmts)
+    try:
+        for p in args.files:
+            with open(p, "rb") as fh:
+                stmts.append(parse_statement(fh.read(), os.path.basename(p)))
+        merged = merge_statements(stmts)
+    except ParseError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     fy = args.fy or detect_fy(merged)
     if not fy:
         print("could not determine financial year — pass --fy", file=sys.stderr)

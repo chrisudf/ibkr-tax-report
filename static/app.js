@@ -42,7 +42,10 @@ function renderFiles() {
 function addFiles(list) {
   for (const f of list) {
     if (!/\.csv$/i.test(f.name)) {
-      showError(`${f.name}: only IBKR CSV exports are supported`);
+      showError(`${f.name} is not a CSV file. This tool reads only the CSV export of an IBKR ` +
+        `Activity Statement or Realized Summary, not the PDF, HTML or Excel versions. Run the ` +
+        `statement again in the IBKR portal with CSV as the format and add that file ` +
+        `(see "Exporting from IBKR" in the README).`);
       continue;
     }
     if (!files.some((x) => x.name === f.name && x.size === f.size)) files.push(f);
@@ -92,7 +95,7 @@ analyzeBtn.addEventListener("click", async () => {
 
 const TABLE_DEFS = {
   closed_lots: { title: "Closed parcels", cols: ["category", "symbol", "qty", "open_date", "close_date", "days_held", "open_cash", "close_cash", "gain_native", "gain_aud", "short", "expiry", "discount_eligible", "note"] },
-  d2_open: { title: "D2 open written options", cols: ["symbol", "write_date", "qty", "premium_native", "currency", "fx", "premium_aud"] },
+  d2_open: { title: "D2 open written options", cols: ["symbol", "write_date", "qty", "premium_native", "currency", "fx", "premium_aud", "expires", "after_fy_end"] },
   transfers: { title: "Assignments / exercises", cols: ["option", "kind", "date", "option_written", "qty", "premium_native", "folded_into"] },
   carry_forward: { title: "Carry-forward parcels", cols: ["category", "symbol", "qty", "acquired", "cost_native", "currency", "fx", "cost_aud"] },
   unmatched: { title: "Unmatched closes", cols: ["category", "symbol", "close_date", "qty", "close_cash", "ib_realized_pl", "gain_aud", "note"] },
@@ -144,7 +147,7 @@ function buildTable(cols, rows) {
 
 function stat(label, value, opts = {}) {
   const div = document.createElement("div");
-  div.className = "stat" + (opts.hero ? " hero" : "");
+  div.className = "stat" + (opts.hero ? " hero" : "") + (opts.warn ? " warn" : "");
   const k = document.createElement("div");
   k.className = "k";
   k.textContent = label;
@@ -184,6 +187,11 @@ function renderResults(data) {
     stat("Losses applied", s.losses_applied_total),
     stat("Discount applied", s.discount_applied),
   );
+  // Counted in 18A, but the uploaded data cannot show whether an assignment
+  // after 30 June disregards it — keep it in view next to the headline.
+  if (s.d2_outcome_unknown) {
+    head.append(stat("D2 fate after 30 June unknown — see warnings", s.d2_outcome_unknown, { warn: true }));
+  }
   const lbls = $("ato-labels");
   const oi = s.other_income;
   lbls.innerHTML = "";
@@ -206,9 +214,10 @@ function renderResults(data) {
   const warn = data.warnings || [];
   $("warnings-card").hidden = warn.length === 0;
   $("warnings").innerHTML = "";
-  warn.forEach((w) => {
+  warn.forEach((w, i) => {
     const li = document.createElement("li");
     li.textContent = w;
+    if (i === 0 && s.d2_outcome_unknown) li.className = "lead";
     $("warnings").appendChild(li);
   });
 

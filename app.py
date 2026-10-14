@@ -66,16 +66,21 @@ def analyze():
         return jsonify(error=f"too many files (max {MAX_FILES})"), 400
 
     stmts = []
-    try:
-        for f in files:
-            # browsers may send a Windows path; strip both separators on any OS
-            name = os.path.basename((f.filename or "statement.csv").replace("\\", "/"))
+    for f in files:
+        # browsers may send a Windows path; strip both separators on any OS
+        name = os.path.basename((f.filename or "statement.csv").replace("\\", "/"))
+        try:
             stmts.append(parse_statement(f.read(), name))
+        except ParseError as e:
+            return jsonify(error=str(e)), 422
+        except Exception as e:  # the parser's own errors are ParseError; this is a backstop
+            return jsonify(error=f"{name} could not be read ({type(e).__name__}: {e}). Upload "
+                                 "the CSV export of an IBKR Activity Statement or Realized "
+                                 "Summary, unmodified."), 422
+    try:
         merged = merge_statements(stmts)
     except ParseError as e:
         return jsonify(error=str(e)), 422
-    except Exception as e:
-        return jsonify(error=f"could not read statements: {e}"), 422
 
     fy_default = detect_fy(merged)
     try:
