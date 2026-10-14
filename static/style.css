@@ -13,6 +13,7 @@
   --card: #ffffff;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; padding: 0; }
 body {
   font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -160,3 +161,30 @@ table.data tr:nth-child(even) td { background: #f7f9fc; }
   animation: spin .8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.about { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 28px; }
+.about h3 { margin: 0 0 6px; font-size: 15px; }
+.about ul { margin: 0; padding-left: 18px; font-size: 13.5px; color: var(--ink); }
+.about li { margin: 5px 0; }
+.about a, footer a { color: var(--accent); }
+.about code { font-size: 12.5px; background: var(--band); padding: 1px 5px; border-radius: 4px; }
+@media (max-width: 760px) { .about { grid-template-columns: 1fr; } }
+
+.options button.secondary {
+  background: #fff; color: var(--accent); border: 1px solid var(--accent); padding: 9px 18px;
+}
+.options button.secondary:disabled { color: #a9b6c4; border-color: #a9b6c4; background: #fff; }
+.demo-box { display: flex; flex-direction: column; gap: 4px; }
+
+.badge {
+  display: inline-block; vertical-align: middle; margin-left: 8px; padding: 2px 9px;
+  border-radius: 20px; font-size: 12px; font-weight: 700; letter-spacing: .3px;
+  background: var(--warn-bg); color: #8a5a00; border: 1px solid var(--warn-border);
+}
+.btn.danger { color: var(--bad); border-color: var(--bad); cursor: pointer; font: inherit; font-size: 14px; font-weight: 600; }
+.btn.danger:disabled { opacity: .5; cursor: wait; }
+.btn.disabled { opacity: .4; pointer-events: none; }
+.expiry { font-size: 13px; color: var(--muted); margin: 10px 0 0; }
+.expiry.gone { color: var(--good); font-weight: 600; }
+
+footer { color: var(--muted); font-size: 12.5px; padding-bottom: 40px; }

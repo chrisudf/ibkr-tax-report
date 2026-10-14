@@ -6,8 +6,11 @@ const fileInput = $("file-input");
 const fileList = $("file-list");
 const analyzeBtn = $("analyze");
 const errBox = $("error");
+const MAX_UPLOAD_MB = Number(document.body.dataset.maxUploadMb) || 10;
 
 let files = [];
+let current = null;        // the result on screen: { token, deleteUrl, expiresAt }
+let expiryTimer = null;
 
 function fmtMoney(v) {
   if (v === "" || v === null || v === undefined) return "";
@@ -69,25 +72,113 @@ fileInput.addEventListener("change", () => { addFiles(fileInput.files); fileInpu
   dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.remove("drag"); }));
 dropzone.addEventListener("drop", (e) => addFiles(e.dataTransfer.files));
 
-analyzeBtn.addEventListener("click", async () => {
+async function runReport(url, fd) {
   errBox.hidden = true;
   $("busy").hidden = false;
   analyzeBtn.disabled = true;
+  $("demo").disabled = true;
   try {
-    const fd = new FormData();
-    files.forEach((f) => fd.append("files", f, f.name));
-    if ($("fy").value) fd.append("fy", $("fy").value);
-    fd.append("entity", $("entity").value);
-    if ($("carried").value) fd.append("carried_losses", $("carried").value);
-    const resp = await fetch("/api/analyze", { method: "POST", body: fd });
-    const data = await resp.json().catch(() => ({ error: `server error (${resp.status})` }));
-    if (!resp.ok) throw new Error(data.error || `server error (${resp.status})`);
+    const resp = await fetch(url, { method: "POST", body: fd });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      // the reverse proxy answers 413 itself, without the app's JSON body
+      if (resp.status === 413 && !data.error) {
+        throw new Error(`Upload too large: the limit is ${MAX_UPLOAD_MB} MB per request.`);
+      }
+      throw new Error(data.error || `server error (${resp.status})`);
+    }
     renderResults(data);
   } catch (e) {
     showError(e.message);
   } finally {
     $("busy").hidden = true;
     analyzeBtn.disabled = files.length === 0;
+    $("demo").disabled = false;
+  }
+}
+
+analyzeBtn.addEventListener("click", () => {
+  const total = files.reduce((n, f) => n + f.size, 0);
+  if (total > MAX_UPLOAD_MB * 1024 * 1024) {
+    showError(`These files add up to ${fmtSize(total)}; the limit is ${MAX_UPLOAD_MB} MB per ` +
+      `report. A year's Activity Statement CSV is usually a few hundred KB — check that ` +
+      `these are the CSV statement exports.`);
+    return;
+  }
+  const fd = new FormData();
+  files.forEach((f) => fd.append("files", f, f.name));
+  if ($("fy").value) fd.append("fy", $("fy").value);
+  fd.append("entity", $("entity").value);
+  if ($("carried").value) fd.append("carried_losses", $("carried").value);
+  runReport("/api/analyze", fd);
+});
+
+// The sample statements are on the server: nothing is uploaded. The year is
+// left to auto-detect so a value typed for the user's own files does not apply.
+$("demo").addEventListener("click", () => {
+  const fd = new FormData();
+  fd.append("entity", $("entity").value);
+  if ($("carried").value) fd.append("carried_losses", $("carried").value);
+  runReport("/api/demo", fd);
+});
+
+// ---------------------------------------------------------------- retention
+
+function setDownloadsGone(message) {
+  ["dl-pdf", "dl-csv", "dl-zip"].forEach((id) => {
+    const a = $(id);
+    a.removeAttribute("href");
+    a.classList.add("disabled");
+    a.setAttribute("aria-disabled", "true");
+  });
+  $("delete-results").hidden = true;
+  $("expiry-note").textContent = message;
+  $("expiry-note").classList.add("gone");
+  if (expiryTimer) clearTimeout(expiryTimer);
+  expiryTimer = null;
+}
+
+function showRetention(data) {
+  if (expiryTimer) clearTimeout(expiryTimer);
+  ["dl-pdf", "dl-csv", "dl-zip"].forEach((id) => {
+    $(id).classList.remove("disabled");
+    $(id).removeAttribute("aria-disabled");
+  });
+  $("delete-results").hidden = false;
+  $("delete-results").disabled = false;
+  $("expiry-note").classList.remove("gone");
+  const expiresAt = new Date(Date.now() + data.expires_in * 1000);
+  current = { token: data.token, deleteUrl: data.delete_url, expiresAt };
+  const hhmm = expiresAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  $("expiry-note").textContent =
+    `The report files are kept on the server until ${hhmm} (${Math.round(data.expires_in / 60)} ` +
+    `minutes) and then deleted automatically. Download what you need before then.`;
+  const token = data.token;
+  expiryTimer = setTimeout(() => {
+    if (current && current.token === token) {
+      setDownloadsGone("These report files have expired and were deleted from the server. " +
+        "Generate the report again to download them.");
+    }
+  }, data.expires_in * 1000);
+}
+
+$("delete-results").addEventListener("click", async () => {
+  if (!current) return;
+  const btn = $("delete-results");
+  btn.disabled = true;
+  try {
+    const resp = await fetch(current.deleteUrl, { method: "DELETE" });
+    if (resp.ok || resp.status === 404) {
+      setDownloadsGone("Deleted: the report files are no longer on the server. What is on " +
+        "this page stays only in your browser until you close or reload it.");
+      current = null;
+    } else {
+      const data = await resp.json().catch(() => ({}));
+      throw new Error(data.error || `server error (${resp.status})`);
+    }
+  } catch (e) {
+    btn.disabled = false;
+    showError(`Could not delete the results: ${e.message}`);
   }
 });
 
@@ -163,7 +254,7 @@ function renderResults(data) {
   $("results").hidden = false;
   // Show which year was inferred: an unnoticed wrong year makes every figure wrong
   // while the report itself still looks perfectly healthy.
-  if (data.fy_detected) {
+  if (data.fy_detected && !data.demo) {
     const fyBox = $("fy");
     if (!fyBox.value) fyBox.value = data.fy_detected;
     const hint = $("fy-hint");
@@ -171,11 +262,13 @@ function renderResults(data) {
     hint.hidden = false;
   }
   $("res-title").textContent = `${data.meta.account} — ${data.meta.fy} (${s.entity})`;
+  $("demo-badge").hidden = !data.demo;
   $("res-meta").textContent =
     `Statement period ${data.meta.period} · ${data.meta.fx_source} · generated ${data.meta.generated}`;
   $("dl-pdf").href = data.downloads.pdf;
   $("dl-csv").href = data.downloads.csv;
   $("dl-zip").href = data.downloads.zip;
+  showRetention(data);
 
   const head = $("headline");
   head.innerHTML = "";
