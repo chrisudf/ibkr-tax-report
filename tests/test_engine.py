@@ -180,6 +180,80 @@ def test_buyback_after_fy_end_keeps_d2_unlike_assignment():
     assert "capital loss in FY2026-27" in note[0]
 
 
+def _d2_warnings(rep):
+    return [w for w in rep["warnings"] if w.startswith("D2 OUTCOME NOT IN UPLOADED DATA")]
+
+
+def test_d2_open_without_post_fy_data_warns_but_keeps_strict_total():
+    """Only the FY statement uploaded: a put still open at 30 June may well have
+    been assigned in July, which s 104-40(5) would disregard. The strict figure
+    must not move, but the run has to say it cannot see the outcome."""
+    rep = run([trade(OPT, "ECHO 02JUL26 115 P", "2026-06-05, 10:00:00", -1, 906, -1, code="O")])
+    s = rep["summary"]
+    prem = rep["d2_open"][0]["premium_aud"]
+    assert s["d2_open_written"] == pytest.approx(prem)            # strict view unchanged
+    assert s["strict_subtotal"] == pytest.approx(prem)
+    assert s["d2_outcome_unknown"] == pytest.approx(prem)
+    assert rep["d2_open"][0]["expires"] == "2026-07-02"
+    assert rep["d2_open"][0]["after_fy_end"] == "NOT IN UPLOADED DATA"
+    w = _d2_warnings(rep)
+    assert len(w) == 1 and rep["warnings"][0] == w[0]             # leads the list
+    assert "ECHO 02JUL26 115 P (written 2026-06-05, expires 2026-07-02" in w[0]
+    assert f"A${prem:,.2f}" in w[0]
+    assert "104-40(5)" in w[0]
+    assert "ends after 2026-07-02" in w[0]                        # which file fixes it
+    text = build_workpaper_csv(rep)
+    assert "NOT in uploaded data" in text
+    assert "D2 OUTCOME NOT IN UPLOADED DATA" in text
+
+
+def test_d2_warning_lists_every_unresolved_contract_with_total():
+    rep = run([
+        trade(OPT, "ECHO 02JUL26 115 P", "2026-06-05, 10:00:00", -1, 906, -1, code="O"),
+        trade(OPT, "NVDA 17JUL26 100 P", "2026-05-10, 10:00:00", -2, 600, -1.32, code="O"),
+        # closed inside the FY: not part of D2 at all
+        trade(OPT, "ABC 17JUL26 50 P", "2025-08-10, 10:00:00", -1, 300, -1, code="O"),
+        trade(OPT, "ABC 17JUL26 50 P", "2025-11-10, 10:00:00", 1, -100, -1, code="C"),
+    ])
+    total = sum(r["premium_aud"] for r in rep["d2_open"])
+    assert rep["summary"]["d2_outcome_unknown"] == pytest.approx(total, abs=0.01)
+    w = _d2_warnings(rep)[0]
+    assert "2 written option(s)" in w
+    assert "ECHO 02JUL26 115 P" in w and "NVDA 17JUL26 100 P" in w and "ABC" not in w
+    assert "ends after 2026-07-17" in w                           # the later expiry
+
+
+def test_d2_post_fy_data_past_expiry_shows_outcome_no_warning():
+    """With a statement running past expiry the outcome is visible: assigned
+    (D2 disregarded), bought back (D2 stays) or expired (D2 stays)."""
+    rep = run([
+        trade(OPT, "ECHO 02JUL26 115 P", "2026-06-05, 10:00:00", -1, 906, -1, code="O"),
+        trade(OPT, "ECHO 02JUL26 115 P", "2026-07-02, 06:20:00", 1, 0, 0, code="A;C"),
+        trade("Stocks", "ECHO", "2026-07-02, 06:20:00", 100, -11500, 0, code="A;O"),
+        trade(OPT, "ECHO 02JUL26 110 P", "2026-06-15, 10:00:00", -1, 552, -1, code="O"),
+        trade(OPT, "ECHO 02JUL26 110 P", "2026-07-01, 10:00:00", 1, -300, -1, code="C"),
+        trade(OPT, "NVDA 17JUL26 100 P", "2026-05-10, 10:00:00", -1, 300, -1, code="O"),
+        trade(OPT, "NVDA 17JUL26 100 P", "2026-07-17, 16:20:00", 1, 0, 0, code="C;Ep"),
+    ], period="November 11, 2025 - August 14, 2026")
+    assert _d2_warnings(rep) == []
+    assert rep["summary"]["d2_outcome_unknown"] == 0.0
+    fates = {r["symbol"]: r["after_fy_end"] for r in rep["d2_open"]}
+    assert fates == {"ECHO 02JUL26 110 P": "closed 2026-07-01",
+                     "NVDA 17JUL26 100 P": "expired 2026-07-17"}
+    assert "NOT in uploaded data" not in build_workpaper_csv(rep)
+
+
+def test_d2_post_fy_data_ending_before_expiry_still_warns():
+    rep = run([trade(OPT, "MSFT 20NOV26 380 P", "2026-02-24, 10:00:00", -1, 3570, -1.7,
+                     code="O")],
+              period="November 11, 2025 - August 14, 2026")
+    w = _d2_warnings(rep)
+    assert len(w) == 1
+    assert "uploaded data ends 2026-08-14" in w[0]
+    assert "ends after 2026-11-20" in w[0]
+    assert rep["summary"]["d2_outcome_unknown"] == rep["summary"]["d2_open_written"]
+
+
 def test_short_call_assignment_adds_premium_to_stock_proceeds():
     rep = run([
         trade("Stocks", "XYZ", "2025-08-01, 10:00:00", 100, -5000, 0, code="O"),

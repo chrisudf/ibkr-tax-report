@@ -40,7 +40,8 @@ TABLES = {
          "short", "expiry", "discount_eligible", "note"],
         "Closed parcels — CGT events realised in the financial year (FIFO matched)"),
     "d2_open": (
-        ["symbol", "write_date", "qty", "premium_native", "currency", "fx", "premium_aud"],
+        ["symbol", "write_date", "qty", "premium_native", "currency", "fx", "premium_aud",
+         "expires", "after_fy_end"],
         "CGT event D2 — options written in the FY and not closed by year end "
         "(taxable at grant date; no discount, s 104-40(2), s 115-25(3))"),
     "transfers": (
@@ -115,6 +116,9 @@ def build_workpaper_csv(report: dict) -> str:
         ("losses_carried_forward_18V", "Losses carried forward (label 18V)"),
     ]:
         _w(w, [label, s[k]])
+        if k == "d2_open_written" and s.get("d2_outcome_unknown"):
+            _w(w, ["  ... of which: fate after 30 June NOT in uploaded data — may be "
+                   "overstated, see WARNINGS", s["d2_outcome_unknown"]])
     oi = s["other_income"]
     _w(w, [])
     _w(w, ["SECTION", "OTHER AMOUNTS (AUD)"])

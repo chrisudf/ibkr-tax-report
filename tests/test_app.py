@@ -36,6 +36,10 @@ def test_analyze_demo_end_to_end(client):
     assert d["tables"]["closed_lots"]["total"] == 4
     assert d["tables"]["transfers"]["total"] == 1
     assert d["reconciliation"]["rows_ok"] == d["reconciliation"]["rows_checked"] == 5
+    # the demo NVDA put is open at 30 June and the files stop there
+    assert s["d2_outcome_unknown"] == 828.62
+    assert d["warnings"][0].startswith("D2 OUTCOME NOT IN UPLOADED DATA")
+    assert "NVDA 17JUL26 100 P" in d["warnings"][0]
 
     # downloads
     for kind, sniff in (("csv", b"IBKR AUSTRALIAN CGT WORKPAPER"),
