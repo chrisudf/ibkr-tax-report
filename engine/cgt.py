@@ -648,6 +648,40 @@ def _pre_data_lots(stmt: Statement) -> dict:
     return lots
 
 
+def _snapshot_mismatches(stmt: Statement, pre_lots: dict, splits: list[SplitEvent]) -> list[str]:
+    """Each later statement's opening positions (Mark-to-Market "Prior
+    Quantity") against what the data before it adds up to. A difference means
+    trades are missing before that date — a gap between the files, or a file
+    that is not complete — and FIFO would match later sales against parcels
+    that were already sold. Symbols touched by a split are left out: their
+    quantities change without a trade."""
+    snaps = sorted((p for p in stmt.position_snapshots if p.as_of), key=lambda p: p.as_of)
+    split_roots = {(ev.old_symbol or ev.new_symbol or "").partition(" ")[0] for ev in splits}
+    out = []
+    for snap in snaps[1:]:
+        start = datetime.combine(snap.as_of, time())
+        held: dict = defaultdict(float)
+        for key, lot in pre_lots.items():
+            held[key] += lot.qty
+        for t in stmt.trades:
+            if t.category in CGT_CATEGORIES and t.dt < start:
+                held[(t.category, t.symbol)] += t.qty
+        keys = set(held) | {k for k in snap.qty if k[0] in CGT_CATEGORIES}
+        diffs = [f"{sym} {snap.qty.get((cat, sym), 0.0):g} (the data adds up to "
+                 f"{held.get((cat, sym), 0.0):g})"
+                 for cat, sym in sorted(keys)
+                 if sym.partition(" ")[0] not in split_roots
+                 and abs(held.get((cat, sym), 0.0) - snap.qty.get((cat, sym), 0.0)) > 1e-6]
+        if diffs:
+            more = f" and {len(diffs) - 8} more" if len(diffs) > 8 else ""
+            out.append(
+                f"POSITIONS DO NOT ADD UP at the start of {snap.source_name} ({snap.as_of}): "
+                f"IBKR reports {', '.join(diffs[:8])}{more}. Trades before that date are "
+                "missing — a gap between the uploaded files, or an incomplete file — so FIFO "
+                "history for these symbols is unreliable. Upload the missing statement.")
+    return out
+
+
 def _d2_outcome_warning(unresolved: list, data_end: date | None, fy_end: date) -> str:
     """Warning for D2 premiums whose post-30-June fate the uploaded data cannot show.
 
@@ -815,6 +849,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
 
     trades = stmt.trades
     pre_lots = _pre_data_lots(stmt)
+    warnings.extend(_snapshot_mismatches(stmt, pre_lots, splits))
     data_start_d = stmt.period_start
     data_start = datetime.combine(data_start_d, time()) if data_start_d else None
     before_data = f"before {data_start_d}" if data_start_d else "before the uploaded data"

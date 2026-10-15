@@ -256,6 +256,12 @@ runs the validated refresh weekly. The report shows the coverage it used
   exercise later means amending the return.
 - **"no 'Forex P/L Details' section was found"** warning (AUD base-currency
   accounts only). Add file (b).
+- **"GAP IN THE UPLOADED DATA"** or **"POSITIONS DO NOT ADD UP"** warning. Trades
+  are missing between the files (for example a year left out), so a later sale
+  can be matched against a parcel that was already sold in the missing period.
+  The second check compares each statement's opening positions (IBKR's
+  Mark-to-Market summary) with what the earlier data adds up to. Upload the
+  missing statement.
 - **"DIV 775 MAY BE INCOMPLETE"** warning. A statement's cash flows do not add up
   to its Cash Report by more than 10 units: some cash movement is not in the
   sections the tool reads (for example cash from a corporate action, or a

@@ -16,7 +16,7 @@ import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 
 class ParseError(Exception):
@@ -285,6 +285,8 @@ def _parse_rows(reader, source_name: str) -> Statement:
         sec = sections.setdefault(sec_name, _Section())
         if row_type == "Header":
             sec.set_header(row)
+            # present even when nothing was held: then every prior quantity is 0
+            saw_mtm = saw_mtm or sec_name == "Mark-to-Market Performance Summary"
             continue
         if row_type != "Data":
             continue  # SubTotal / Total / Notes
@@ -401,7 +403,6 @@ def _parse_rows(reader, source_name: str) -> Statement:
                 cash_balances[label][cur] = _num(sec.get(row, "Total"))
 
         elif sec_name == "Mark-to-Market Performance Summary":
-            saw_mtm = True
             cat, sym = sec.get(row, "Asset Category"), sec.get(row, "Symbol").strip()
             if cat in ("", "Total") or not sym or sym.startswith("Total"):
                 continue
@@ -544,9 +545,21 @@ def merge_statements(stmts: list[Statement]) -> Statement:
     # Overlap sanity note
     periods = [(s.period_start, s.period_end, s.source_name) for s in stmts
                if s.period_start and s.period_end]
+    covered_to, covered_by = (periods[0][1], periods[0][2]) if periods else (None, None)
     for i in range(1, len(periods)):
-        if periods[i][0] <= periods[i - 1][1]:
+        start, end, name = periods[i]
+        if start <= periods[i - 1][1]:
             out.warnings.append(
-                f"overlapping statement periods: {periods[i-1][2]} and {periods[i][2]} — "
+                f"overlapping statement periods: {periods[i-1][2]} and {name} — "
                 "duplicate rows were de-duplicated automatically.")
+        elif start > covered_to + timedelta(days=1):
+            # Trades in the gap are missing: FIFO would match later sales against
+            # parcels that may already have been sold in it.
+            out.warnings.append(
+                f"GAP IN THE UPLOADED DATA — nothing covers {covered_to + timedelta(days=1)} to "
+                f"{start - timedelta(days=1)} (between {covered_by} and {name}). Trades in "
+                "that period are missing, so parcels sold in it may be matched again later. "
+                "Upload the statement covering it.")
+        if end > covered_to:
+            covered_to, covered_by = end, name
     return out

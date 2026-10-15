@@ -666,6 +666,37 @@ def test_held_all_year_before_the_data_is_carried_forward_without_a_cost():
     assert rep["reconciliation"]["position_diffs"][0]["note"].startswith("held before the")
 
 
+def _two_years_with_a_missing_one(fy26_prior):
+    fy24 = statement("July 1, 2023 - June 30, 2024", "x", trades=[
+        trade("Stocks", "XYZ", "2023-08-01, 10:00:00", 100, -5000, -1, code="O")],
+        prior_positions=[])
+    fy26 = statement("July 1, 2025 - June 30, 2026", "x", trades=[
+        trade("Stocks", "XYZ", "2025-08-01, 10:00:00", 100, -6000, -1, code="O"),
+        trade("Stocks", "XYZ", "2026-02-02, 10:00:00", -100, 7000, -1,
+              basis="-6001", rpl="998", code="C")],
+        prior_positions=fy26_prior)
+    st = merge_statements([parse_statement(fy24, "fy24.csv"), parse_statement(fy26, "fy26.csv")])
+    return compute_tax_report(st, Options(fy_end_year=2026), FX)
+
+
+def test_gap_between_uploaded_statements_is_flagged():
+    """FY2023-24 and FY2025-26 uploaded, FY2024-25 not: the 2023 parcel may have
+    been sold in the missing year, and FIFO would match this year's sale to it."""
+    rep = _two_years_with_a_missing_one([])
+    (w,) = [w for w in rep["warnings"] if w.startswith("GAP IN THE UPLOADED DATA")]
+    assert "2024-07-01 to 2025-06-30" in w and "fy24.csv" in w and "fy26.csv" in w
+
+
+def test_opening_positions_that_do_not_add_up_are_flagged():
+    """IBKR's opening position for FY2025-26 says XYZ was 0: the 2023 parcel was
+    sold in the missing year. The trades in the data say 100."""
+    rep = _two_years_with_a_missing_one([])
+    (w,) = [w for w in rep["warnings"] if w.startswith("POSITIONS DO NOT ADD UP")]
+    assert "fy26.csv (2025-07-01)" in w and "XYZ 0 (the data adds up to 100)" in w
+    agrees = _two_years_with_a_missing_one([("Stocks", "XYZ", 100)])
+    assert not any(w.startswith("POSITIONS DO NOT ADD UP") for w in agrees["warnings"])
+
+
 def test_data_starting_after_1_july_warns_that_a_premium_may_be_missing():
     rep = run([trade(OPT, "ABC 19DEC25 50 P", "2025-12-01, 10:00:00", 1, -200, -1,
                      basis="499", rpl="298", code="C")],
