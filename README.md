@@ -51,18 +51,52 @@ settings listed at the top of [`app.py`](app.py).
 
 ## The three CSV files
 
-For one financial year, upload all three. Each supplies something the others do
-not, and leaving one out changes the figures:
+For one financial year, upload all three (file (b) only for an AUD
+base-currency account). Each supplies something the others do not, and
+leaving one out changes the figures:
 
 | | File | Period | What it supplies | If it is missing |
 |---|---|---|---|---|
-| **(a)** | **Activity Statement** for the year | 1 July – 30 June | Trades, open positions, dividends, interest, fees — the main data | Nothing to report on. |
-| **(b)** | **Realized Summary** for the same year | 1 July – 30 June | The only export with a **Forex P/L Details** section: realised FX gains and losses (Div 775 — ordinary income, not CGT) | Realised FX gains/losses are counted as **0**. The report warns about it. |
+| **(a)** | **Activity Statement** for the year | 1 July – 30 June | Trades, open positions, dividends, interest, fees, deposits, conversions and the Cash Report — the main data | Nothing to report on. |
+| **(b)** | **Realized Summary** for the same year — **AUD base-currency accounts only** | 1 July – 30 June | The only export with a **Forex P/L Details** section. In an AUD-base account that is IBKR's own figure for realised FX gains and losses on the foreign cash (Div 775 — ordinary income, not CGT). In a USD-base (or any non-AUD-base) account the section measures the *AUD* cash in USD, which is not a Div 775 amount, so it is ignored and Div 775 is worked out from the cash flows instead — see [Foreign currency](#foreign-currency-div-775). | AUD base: realised FX gains/losses are counted as **0**, and the report warns. Other base currencies: no effect. |
 | **(c)** | **Activity Statement that runs past 30 June** | Must **start on or before 1 July** and **end after the expiry of every option you had written that was still open at 30 June** (e.g. 11 Nov – 14 Aug). Overlap with (a) is fine; a gap after 30 June is not — an assignment dated before the file starts is simply missing. | What happened to those options after year end: one assigned or exercised in July has its D2 gain disregarded (s 104-40(5)). Also its own **Financial Instrument Information** section — the conid mapping used to unify tickers renamed mid-life. | Every written option open at 30 June is taxed in full as a D2 gain (the strict view), including ones assigned in July — the net capital gain can be **overstated**. The report warns, naming each contract and its D2 amount. Not needed if no written options were open at 30 June. |
 
 **(b) and (c) cannot stand in for each other.** The Realized Summary has no
 Financial Instrument Information section and stops at 30 June; activity
 statements have no Forex P/L Details section.
+
+### Foreign currency (Div 775)
+
+For an Australian resident every non-AUD cash balance in the account is
+foreign currency, whatever IBKR's base currency is. In a USD-base account the
+real exposure is the USD cash itself, and IBKR's Forex P/L Details does not
+cover it at all. So for any non-AUD base account the tool works out Div 775
+from the statements' own cash flows: trades, currency conversions, dividends,
+withholding tax, interest, fees, deposits and withdrawals.
+
+- Spending, converting or withdrawing USD is forex realisation event 2
+  (s 775-45). The gain or loss is the AUD value then less the AUD forex cost
+  base of the units used; units are matched first-in first-out
+  (s 775-145(1)). Paying back a USD debit balance is FRE 4 (s 775-55). The
+  method reproduces the ATO's worked FIFO example to the cent.
+- AUD values are RBA daily rates, except for a conversion to or from AUD,
+  where the AUD side of the trade is the exact value.
+- Each statement's Cash Report checks the result: starting cash plus the
+  flows read must equal IBKR's ending cash. A gap of more than 10 units is
+  flagged as a warning. Small gaps are normal, because GST charged on fees is
+  not itemised anywhere in the statement.
+- An opening balance whose history is not in the uploaded files is costed at
+  the RBA rate on the first day, with a warning. Upload earlier years'
+  statements to avoid that.
+- **Not applied:** the $250,000 balance election (s 775-230), under which these
+  FRE 2 and FRE 4 amounts on a qualifying forex account are disregarded while
+  its balance test is met. Whether an IBKR account qualifies, and whether the
+  election was made, are questions for your tax agent. The retranslation
+  election (s 775-270) and the weighted-average alternative to FIFO are not
+  applied either.
+
+Every realisation is listed in the report's Div 775 schedule (CSV, PDF and
+ZIP), with the AUD value, the FIFO cost and the dates the units were acquired.
 
 If you still hold parcels bought before the reported year, also upload the
 earlier years' activity statements: they supply the FIFO history (the
@@ -210,7 +244,16 @@ runs the validated refresh weekly. The report shows the coverage it used
   before 1 July and ending after the latest expiry the warning names. For a
   contract that has not expired yet the strict figure stands; an assignment or
   exercise later means amending the return.
-- **"no 'Forex P/L Details' section was found"** warning. Add file (b).
+- **"no 'Forex P/L Details' section was found"** warning (AUD base-currency
+  accounts only). Add file (b).
+- **"DIV 775 MAY BE INCOMPLETE"** warning. A statement's cash flows do not add up
+  to its Cash Report by more than 10 units: some cash movement is not in the
+  sections the tool reads (for example cash from a corporate action, or a
+  transfer between accounts). Find it in the statement before relying on the
+  FX figure.
+- **"DIV 775 OPENING BALANCE"** warning. The earliest file starts with foreign
+  cash whose history is not uploaded, so it is costed at the RBA rate on that
+  day. Upload the earlier years' statements.
 - **`no RBA USD rate within 10 days on or before <date>`.** Refresh the rate
   table — see [RBA exchange rates](#rba-exchange-rates-datarba_f11csv).
 - **macOS: `library load disallowed by system policy` on import.** The folder
@@ -262,7 +305,10 @@ runs the validated refresh weekly. The report shows the coverage it used
   warnings.
 - Other amounts: dividends, withholding tax (FITO), interest (IBKR nets borrow
   fees into it — the borrow-fee detail is informational only), account fees,
-  and realised FX P/L (Div 775 ordinary income; needs file (b)).
+  and realised FX gains/losses (Div 775 ordinary income, not CGT). For a
+  non-AUD base account Div 775 is worked out FIFO from the cash flows; for an
+  AUD base account it comes from file (b) — see
+  [Foreign currency](#foreign-currency-div-775).
 - Reconciliation: per-row vs IBKR Realized P/L, year-end parcels vs the Open
   Positions snapshot, with expected differences (premium folds) auto-annotated.
 
@@ -277,6 +323,7 @@ cli.py            command-line runner
 engine/parser.py  IBKR multi-section CSV parser (header-name mapped)
 engine/fx.py      RBA F11.1 daily rates
 engine/cgt.py     FIFO + CGT engine (the tax logic lives here)
+engine/forex.py   Div 775 on foreign-currency cash (FIFO, checked against the Cash Report)
 engine/outputs.py workpaper CSV + ZIP (formula-injection guarded)
 engine/pdf.py     PDF report (reportlab)
 data/rba_f11.csv  bundled RBA F11.1 rate table
