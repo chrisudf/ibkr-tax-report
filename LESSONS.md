@@ -3,6 +3,33 @@
 Problems met while building and running this tool, what caused them, and what
 we do now. Newest first.
 
+## 2026-10-15 — Div 775 in USD-base accounts
+
+- **A broker's "FX P/L" is measured in the broker's base currency, not yours.**
+  The tool reported IBKR's Forex P/L Details as Div 775. In a USD-base account
+  that section is the gain or loss on the *AUD* cash measured in USD, which
+  for an Australian resident is no forex gain at all. Meanwhile the real
+  exposure, the USD cash, was not counted anywhere (found by a tax-logic
+  audit). Before relying on a figure from a source, ask whose currency it is
+  in and what it measures.
+- **Build it from the primitives, then reconcile with the source's totals.**
+  Div 775 is now worked out FIFO from the statement's own cash flows, and each
+  statement's Cash Report checks that every flow was read. The real statements
+  reconcile within US$1–2, the GST on fees that IBKR does not itemise.
+- **A statement's totals include rows dated outside its own period.** The first
+  reconciliation selected flows by the statement's dates after merging files,
+  and was US$18–88 out on real data: IBKR lists, for example, June interest
+  posted in early July in the June statement. Each Cash Report is now checked
+  against the rows of its own file. Synthetic test data had not shown this;
+  real data did within minutes.
+- **Use the regulator's worked example as the golden test.** The ATO's FIFO
+  example (deposits, withdrawals, overdraft, repayment) is reproduced to the
+  cent in `tests/test_forex.py`. A property test checks that every AUD amount
+  in or out is either realised or still in an open lot, whatever the order.
+- **Check the section numbers.** s 775-145 turned out to be the FIFO rule, not
+  the $250,000 election (s 775-230). Legislative references go in only after
+  checking them against the ATO's own pages.
+
 ## 2026-10-15 — hosting at cgt.nomad403.cc (PRs #2, #3)
 
 ### Privacy claims have to be true of the code, not of the intent

@@ -507,7 +507,9 @@ def _report_response(uploads: list[tuple[str, bytes]], form, demo: bool = False)
             transfers=preview(report["transfers"]),
             carry_forward=preview(report["carry_forward"]),
             unmatched=preview(report["unmatched"]),
+            fx_realisations=preview(report["fx_realisations"]),
         ),
+        forex_notes=report["forex_notes"],
         downloads=dict(
             csv=f"/api/download/{token}/csv",
             pdf=f"/api/download/{token}/pdf",

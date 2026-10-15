@@ -7,6 +7,7 @@ methodology with legislative references, and a disclaimer.
 from __future__ import annotations
 
 import io
+from html import escape
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT
@@ -65,7 +66,7 @@ def _money(v) -> str:
 _NUMERIC_COLS = {"qty", "open_cash", "close_cash", "gain_native", "gain_aud",
                  "premium_native", "premium_aud", "cost_native", "cost_aud",
                  "amount", "aud", "ib_realized_pl", "close_cash_alloc",
-                 "days_held", "open_fx", "close_fx", "fx"}
+                 "days_held", "open_fx", "close_fx", "fx", "units", "aud_value", "aud_cost"}
 
 
 def _fmt(col: str, v):
@@ -85,8 +86,9 @@ def _data_table(cols, rows, styles, col_widths=None, note_col="note"):
         line = []
         for c in cols:
             v = _fmt(c, r.get(c, ""))
-            if c in (note_col, "description") and v:
-                line.append(Paragraph(v, styles["cell"]))
+            if c in (note_col, "description", "source") and v:
+                # Paragraph parses markup: statement text such as "AT&T" must be escaped
+                line.append(Paragraph(escape(v), styles["cell"]))
             else:
                 line.append(v)
         data.append(line)
@@ -158,6 +160,14 @@ METHOD_POINTS = [
     ("Discount", "Applied only to long parcels acquired at least 12 months before the "
      "CGT event (s 115-25(1)) at the entity's statutory rate, after applying losses "
      "against non-discountable gains first."),
+    ("Foreign currency (Div 775)", "Non-AUD cash is a right to receive (credit balance) "
+     "or an obligation to pay (debit balance) foreign currency. Spending, converting or "
+     "withdrawing it is forex realisation event 2 (s 775-45); paying back a debit balance "
+     "is FRE 4 (s 775-55). Units are matched first-in first-out (s 775-145(1)) using the "
+     "cash flows in the statements, checked against each statement's Cash Report. For an "
+     "AUD base-currency account IBKR's own Forex P/L Details is used instead. The "
+     "$250,000 balance election (s 775-230) and the retranslation election (s 775-270) "
+     "are not applied."),
     ("Corporate actions", "Splits are read from the statement's Corporate Actions "
      "section and applied chronologically. Unrecognised actions are listed as warnings "
      "and are never silently guessed."),
@@ -245,11 +255,17 @@ def build_pdf(report: dict) -> bytes:
         ("Account fees (review deductibility)", oi["fees_aud"]),
         ("Realised FX gain/loss — ordinary income, Div 775 (not CGT)", oi["forex_pl_aud"]),
     ], styles, width=200 * mm))
+    if oi.get("forex_method"):
+        el.append(Spacer(1, 1.5 * mm))
+        el.append(Paragraph(f"<b>Div 775 method:</b> {escape(oi['forex_method'])}.",
+                            styles["small"]))
+    for note in report.get("forex_notes") or []:
+        el.append(Paragraph("• " + escape(note), styles["small"]))
 
     if report["warnings"]:
         el.append(Spacer(1, 3 * mm))
         el.append(Paragraph("Warnings — read before relying on the figures", styles["h2"]))
-        wtab = Table([[Paragraph(w, styles["warn"])] for w in report["warnings"]],
+        wtab = Table([[Paragraph(escape(w), styles["warn"])] for w in report["warnings"]],
                      colWidths=[250 * mm], hAlign="LEFT")
         wtab.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), WARN_BG),
@@ -266,12 +282,12 @@ def build_pdf(report: dict) -> bytes:
         el.append(Spacer(1, 3 * mm))
         el.append(Paragraph("Cross-year flags — amendments and tracking", styles["h2"]))
         for f in flags:
-            el.append(Paragraph("• " + f, styles["body"]))
+            el.append(Paragraph("• " + escape(f), styles["body"]))
 
     # Detail schedules
     for key, (cols, title) in TABLES.items():
         rows = report.get(key) or []
-        if not rows and key in ("transfers", "unmatched"):
+        if not rows and key in ("transfers", "unmatched", "fx_realisations"):
             continue
         el.append(PageBreak())
         el.append(Paragraph(f"{title} — {len(rows)} rows", styles["h2"]))

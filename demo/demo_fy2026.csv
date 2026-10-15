@@ -18,6 +18,7 @@ Trades,Data,Order,Equity and Index Options,USD,AMD 16JAN26 200 C,"2025-08-04, 10
 Trades,Data,Order,Equity and Index Options,USD,AMD 16JAN26 200 C,"2026-01-17, 16:20:00",-1,,,0,0,-400.66,-400.66,,C;Ep
 Trades,Data,Order,Stocks,USD,GOOG,"2025-07-10, 10:00:00",20,,,-3600,-1,,,,O
 Trades,Data,Order,Stocks,USD,GOOG,"2026-05-01, 10:00:00",-100,,,2100,-1,-1800.5,298.5,,C
+Trades,Data,Order,Forex,USD,AUD.USD,"2026-02-02, 11:00:00",21613.83,,,-15000,-2,,,,
 Corporate Actions,Header,Asset Category,Currency,Report Date,Date/Time,Description,Quantity,Proceeds,Value,Realized P/L,Code
 Corporate Actions,Data,Stocks,USD,2026-03-16,"2026-03-15, 20:25:00","GOOG(US02079K3059) Split 10 for 1 (GOOG, ALPHABET INC-CL C, US02079K3059)",180,0,0,0,
 Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L,Code
@@ -32,6 +33,13 @@ Interest,Header,Currency,Date,Description,Amount
 Interest,Data,USD,2026-01-05,USD Credit Interest for Dec-2025,12.34
 Fees,Header,Subtitle,Currency,Date,Description,Amount
 Fees,Data,Other Fees,USD,2025-12-01,Market data subscription,-10.0
+Deposits & Withdrawals,Header,Currency,Settle Date,Description,Amount
+Deposits & Withdrawals,Data,AUD,2026-02-04,Disbursement,-21000
+Cash Report,Header,Currency Summary,Currency,Total,Month to Date,Year to Date
+Cash Report,Data,Starting Cash,AUD,1000.0,,
+Cash Report,Data,Starting Cash,USD,9770.34,,
+Cash Report,Data,Ending Cash,AUD,1613.83,,
+Cash Report,Data,Ending Cash,USD,9865.63,,
 Codes,Header,Code,Meaning
 Codes,Data,A,Assignment
 Codes,Data,C,Closing Trade

@@ -8,13 +8,22 @@ Account Information,Data,Account,U9999999
 Account Information,Data,Name,Demo Client
 Account Information,Data,Base Currency,USD
 Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Forex,USD,AUD.USD,"2024-08-14, 11:00:00",-25000,,,16575,-2,,,,
 Trades,Data,Order,Stocks,USD,AAPL,"2024-08-15, 10:00:00",100,,,-15000,-1,,,,O
 Trades,Data,Order,Stocks,USD,TSLA,"2025-03-03, 10:00:00",50,,,-10000,-1,,,,O
+Trades,Data,Order,Forex,USD,AUD.USD,"2025-03-03, 10:00:01",-14000,,,8701,0,,,,AFx
 Trades,Data,Order,Stocks,USD,TSLA,"2025-05-20, 10:00:00",-50,,,9000,-1,-10001,-1002,,C
 Trades,Data,Order,Equity and Index Options,USD,MSFT 19DEC25 400 P,"2025-06-10, 11:00:00",-1,,,500,-0.66,,,,O
 Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L,Code
 Open Positions,Data,Summary,Stocks,USD,AAPL,100,,,15001,,,,
 Open Positions,Data,Summary,Equity and Index Options,USD,MSFT 19DEC25 400 P,-1,,,-499.34,,,,
+Deposits & Withdrawals,Header,Currency,Settle Date,Description,Amount
+Deposits & Withdrawals,Data,AUD,2024-08-13,Electronic Fund Transfer,40000
+Cash Report,Header,Currency Summary,Currency,Total,Month to Date,Year to Date
+Cash Report,Data,Starting Cash,AUD,0.0,,
+Cash Report,Data,Starting Cash,USD,0.0,,
+Cash Report,Data,Ending Cash,AUD,1000.0,,
+Cash Report,Data,Ending Cash,USD,9770.34,,
 Codes,Header,Code,Meaning
 Codes,Data,A,Assignment
 Codes,Data,C,Closing Trade

@@ -57,6 +57,13 @@ TABLES = {
         ["category", "symbol", "currency", "close_date", "qty", "close_cash",
          "ib_realized_pl", "gain_aud", "note"],
         "Closing trades whose opening parcels predate the uploaded data — REVIEW"),
+    "fx_realisations": (
+        ["date", "currency", "event", "units", "aud_value", "aud_cost", "gain_aud",
+         "acquired", "source"],
+        "Div 775 — forex realisations on foreign-currency cash in the FY: ordinary income or "
+        "deduction, NOT capital gains. FIFO (s 775-145(1)); aud_value = AUD value of the "
+        "units at the event, aud_cost = their forex cost base (FRE 2) or the proceeds of "
+        "assuming the obligation (FRE 4)"),
 }
 
 OTHER_INCOME_TABLES = {
@@ -127,6 +134,9 @@ def build_workpaper_csv(report: dict) -> str:
     _w(w, ["Interest (net; IBKR includes borrow fees here)", oi["interest_aud"]])
     _w(w, ["Account fees (review deductibility)", oi["fees_aud"]])
     _w(w, ["Realised FX gain/loss (Div 775 ordinary income)", oi["forex_pl_aud"]])
+    _w(w, ["  method", oi.get("forex_method", "")])
+    for note in report.get("forex_notes") or []:
+        _w(w, ["  note", note])
 
     for key, (cols, title) in TABLES.items():
         rows = report.get(key) or []
@@ -212,6 +222,7 @@ def build_zip(report: dict, workpaper_csv: str, pdf_bytes: bytes | None) -> byte
         z.writestr(f"{stem}_summary.json", json.dumps(
             dict(meta=report["meta"], summary=report["summary"],
                  warnings=report["warnings"],
+                 forex_notes=report.get("forex_notes", []),
                  amendment_flags=report.get("amendment_flags", []),
                  cross_year_notes=report.get("cross_year_notes", [])),
             indent=1, default=str))

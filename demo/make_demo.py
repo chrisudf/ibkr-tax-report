@@ -3,8 +3,11 @@
 Covers every lifecycle path the engine handles: plain gains/losses, >12-month
 discount, written options open at 30 June (D2), a prior-year written option
 bought back (cross-year loss), an assignment with premium fold, a long option
-expiring worthless (C2), a 10:1 stock split, dividends/WHT/interest/fees, and
-an Open Positions snapshot for reconciliation.
+expiring worthless (C2), a 10:1 stock split, dividends/WHT/interest/fees, an
+Open Positions snapshot for reconciliation, and the cash side: an AUD deposit,
+AUD->USD conversions (one automatic, code AFx), a USD->AUD conversion and an
+AUD withdrawal, with a Cash Report that balances — so Div 775 on the USD cash
+is worked out and reconciled.
 
 Run:  python demo/make_demo.py
 """
@@ -27,7 +30,10 @@ def trade(cat, sym, dt, qty, proceeds, comm, basis="", rpl="", code=""):
 
 
 def statement(period, when, trades, open_positions=(), corporate_actions=(),
-              dividends=(), wht=(), interest=(), fees=(), instrument_info=()):
+              dividends=(), wht=(), interest=(), fees=(), instrument_info=(),
+              deposits=(), cash_start=None):
+    """One statement as CSV text. With `cash_start` (currency -> starting cash)
+    a Cash Report is added whose ending cash is worked out from the rows."""
     rows = [
         ["Statement", "Header", "Field Name", "Field Value"],
         ["Statement", "Data", "BrokerName", "Interactive Brokers Australia Pty Ltd. (DEMO)"],
@@ -59,6 +65,18 @@ def statement(period, when, trades, open_positions=(), corporate_actions=(),
         rows.append(["Fees", "Header", "Subtitle", "Currency", "Date", "Description",
                      "Amount"])
         rows.extend(fees)
+    if deposits:
+        rows.append(["Deposits & Withdrawals", "Header", "Currency", "Settle Date",
+                     "Description", "Amount"])
+        rows.extend(deposits)
+    if cash_start is not None:
+        end = cash_end(cash_start, trades, dividends, wht, interest, fees, deposits)
+        rows.append(["Cash Report", "Header", "Currency Summary", "Currency", "Total",
+                     "Month to Date", "Year to Date"])
+        for label, balances in (("Starting Cash", cash_start), ("Ending Cash", end)):
+            for ccy in sorted(balances):
+                rows.append(["Cash Report", "Data", label, ccy, round(balances[ccy], 2),
+                             "", ""])
     if instrument_info:
         rows.append(["Financial Instrument Information", "Header", "Asset Category",
                      "Symbol", "Description", "Conid", "Security ID", "Underlying",
@@ -79,6 +97,25 @@ def statement(period, when, trades, open_positions=(), corporate_actions=(),
     return buf.getvalue()
 
 
+def cash_end(start, trades, dividends, wht, interest, fees, deposits):
+    """Ending cash per currency implied by the rows (what IBKR's Cash Report shows)."""
+    end = dict(start)
+
+    def add(ccy, amount):
+        end[ccy] = end.get(ccy, 0.0) + float(amount)
+    for t in trades:
+        cat, ccy, sym, qty, proceeds, comm = t[3], t[4], t[5], t[7], t[10], t[11]
+        add(ccy, proceeds)
+        add(ccy, comm)
+        if cat == "Forex":                       # "AUD.USD": quantity is in AUD
+            add(sym.split(".")[0], qty)
+    for row in (*dividends, *wht, *interest, *deposits):
+        add(row[2], row[-1])
+    for row in fees:
+        add(row[3], row[-1])
+    return end
+
+
 def opos(cat, sym, qty, basis):
     return ["Open Positions", "Data", "Summary", cat, "USD", sym, qty, "", "", basis,
             "", "", "", ""]
@@ -94,19 +131,28 @@ def instrument(cat, symbols, conid, underlying=""):
 OPT = "Equity and Index Options"
 
 # ---------------- FY2024-25 file ----------------
-fy25 = statement(
-    "July 1, 2024 - June 30, 2025", "2025-07-05, 09:00:00 AEST",
-    trades=[
+FY25_DEPOSITS = [
+    ["Deposits & Withdrawals", "Data", "AUD", "2024-08-13", "Electronic Fund Transfer", 40000],
+]
+FY25_TRADES = [
+        # AUD 25,000 converted at 0.6630 (RBA that day: 0.6634) -> Div 775 cost base
+        trade("Forex", "AUD.USD", "2024-08-14, 11:00:00", -25000, 16575, -2),
         # AAPL parcel held into FY26 (>12 months by sale) — discount demo
         trade("Stocks", "AAPL", "2024-08-15, 10:00:00", 100, -15000, -1, code="O"),
         # TSLA loss realised inside FY25
         trade("Stocks", "TSLA", "2025-03-03, 10:00:00", 50, -10000, -1, code="O"),
+        # IBKR's automatic conversion settling the TSLA purchase (code AFx)
+        trade("Forex", "AUD.USD", "2025-03-03, 10:00:01", -14000, 8701, 0, code="AFx"),
         trade("Stocks", "TSLA", "2025-05-20, 10:00:00", -50, 9000, -1, "-10001", "-1002",
               code="C"),
         # MSFT put written near year end, open at 30 Jun 2025 (D2 in FY25;
         # bought back in FY26 -> cross-year loss demo)
         trade(OPT, "MSFT 19DEC25 400 P", "2025-06-10, 11:00:00", -1, 500, -0.66, code="O"),
-    ],
+]
+FY25_START = {"AUD": 0.0, "USD": 0.0}
+fy25 = statement(
+    "July 1, 2024 - June 30, 2025", "2025-07-05, 09:00:00 AEST",
+    trades=FY25_TRADES, deposits=FY25_DEPOSITS, cash_start=FY25_START,
     open_positions=[
         opos("Stocks", "AAPL", 100, 15001),
         opos(OPT, "MSFT 19DEC25 400 P", -1, -499.34),
@@ -116,6 +162,10 @@ fy25 = statement(
 # ---------------- FY2025-26 file ----------------
 fy26 = statement(
     "July 1, 2025 - June 30, 2026", "2026-07-05, 09:00:00 AEST",
+    cash_start=cash_end(FY25_START, FY25_TRADES, (), (), (), (), FY25_DEPOSITS),
+    deposits=[
+        ["Deposits & Withdrawals", "Data", "AUD", "2026-02-04", "Disbursement", -21000],
+    ],
     trades=[
         # AAPL sold after 523 days -> discount-eligible gain
         trade("Stocks", "AAPL", "2026-01-20, 10:00:00", -100, 19000, -1, "-15001", "3998",
@@ -137,6 +187,8 @@ fy26 = statement(
         trade("Stocks", "GOOG", "2025-07-10, 10:00:00", 20, -3600, -1, code="O"),
         trade("Stocks", "GOOG", "2026-05-01, 10:00:00", -100, 2100, -1, "-1800.5", "298.5",
               code="C"),
+        # USD 15,000 back to AUD at 0.6940 (RBA 0.6942): an FRE 2 on the USD
+        trade("Forex", "AUD.USD", "2026-02-02, 11:00:00", 21613.83, -15000, -2),
     ],
     corporate_actions=[
         ["Corporate Actions", "Data", "Stocks", "USD", "2026-03-16",
