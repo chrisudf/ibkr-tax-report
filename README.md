@@ -10,15 +10,44 @@ Drop in your IBKR CSV exports and get a reviewable working paper as **CSV + PDF*
 leg translated at the RBA daily rate, written options as CGT event D2, the CGT
 discount by entity type, and a reconciliation against IBKR's own figures.
 
-Everything runs locally. No data leaves the machine, and no IBKR login or API
-token is involved — only CSV files you export yourself.
+Run it on your own machine (`python app.py`) and nothing leaves it; or use the
+hosted copy at **https://cgt.nomad403.cc**, which works the same way but
+receives your files over HTTPS — see [Privacy](#privacy) for exactly what it
+does with them. Either way no IBKR login or API token is involved — only CSV
+files you export yourself. **Try with sample data** on the start page runs a
+fictional account end to end without uploading anything.
 
 > **Not tax advice.** This is a record-keeping and calculation tool. It does not
 > decide whether you hold investments on capital or revenue account, your
 > residency, or anything else that turns on your circumstances, and it can be
 > wrong. Have a registered tax agent check the figures before you lodge.
 > Provided "as is", without warranty — see [LICENSE](LICENSE).
-> 本工具仅作记录与计算用途，不构成税务建议；数字须经注册税务代理复核后方可申报。
+
+## Privacy
+
+**Local** (`python app.py`): the server binds 127.0.0.1 only and sends nothing
+anywhere.
+
+**Hosted** (https://cgt.nomad403.cc, deployed from [`deploy/`](deploy/README.md)):
+
+- Files travel over HTTPS to the server and are parsed **in memory**. The
+  uploaded CSVs are never written to disk: the app keeps every upload in RAM
+  rather than letting the web framework spool large ones to a temp file, and
+  the container has no swap.
+- The generated report — workpaper CSV, PDF, ZIP — is kept in a RAM-backed
+  directory for **at most 15 minutes** so you can download it, then deleted
+  automatically by a background sweeper; expired links stop working at once.
+  **Delete my results now** removes it immediately.
+- **No file contents are logged.** There is no access log, no analytics, no
+  tracking and no cookies. Your IP address is held in memory for up to an hour
+  after your last report, for rate limiting (10 reports a minute, 60 an hour),
+  and nowhere else.
+- Uploads are limited to **10 MB per report**. A year's Activity Statement CSV
+  is usually 100–300 KB even for an active options trader, so the limit only
+  catches the wrong kind of file.
+
+Both modes run the same code: the hosted mode is `IBKR_TAX_HOSTED=1` plus the
+settings listed at the top of [`app.py`](app.py).
 
 ## The three CSV files
 
@@ -91,6 +120,29 @@ Doing it by hand instead of the setup script:
 | run web UI | `.venv/bin/python app.py` | `.venv\Scripts\python app.py` |
 | run tests | `.venv/bin/python -m pytest tests/` | `.venv\Scripts\python -m pytest tests\` |
 
+### Local and hosted mode
+
+`python app.py` starts in **local mode** (the default): the page says nothing
+leaves the machine, and there is no rate limit. Setting `IBKR_TAX_HOSTED=1`
+switches the same app to **hosted mode**, which is what
+https://cgt.nomad403.cc runs: the page carries the hosted privacy notes
+instead, and reports are rate-limited per address (10 a minute, 60 an hour).
+Use it to preview the hosted page before deploying; it still binds
+127.0.0.1:5173 only.
+
+| | macOS / Linux | Windows (PowerShell) |
+|---|---|---|
+| local mode | `.venv/bin/python app.py` | `.\.venv\Scripts\python.exe app.py` |
+| hosted mode | `IBKR_TAX_HOSTED=1 .venv/bin/python app.py` | `$env:IBKR_TAX_HOSTED = "1"; .\.venv\Scripts\python.exe app.py` |
+| back to local | (the variable applied to that command only) | `Remove-Item Env:IBKR_TAX_HOSTED`, then run again |
+
+In PowerShell the variable stays set for the rest of that terminal session,
+so remove it (or open a new terminal) to go back to local mode. The other
+settings (`IBKR_TAX_RESULT_TTL_MINUTES`, `IBKR_TAX_RATE_LIMIT`, …) are listed
+at the top of [`app.py`](app.py) and work the same way. The real server runs
+the hosted mode under gunicorn in a container — see
+[`deploy/README.md`](deploy/README.md).
+
 CLI (same engine) — shown for macOS/Linux; on Windows swap the interpreter
 path for `.venv\Scripts\python`:
 
@@ -99,7 +151,8 @@ path for `.venv\Scripts\python`:
     --fy 2026 --entity smsf --carried-losses 1944 -o out/
 ```
 
-Demo data (fictional account, covers every lifecycle path):
+Demo data (fictional account U9999999, covers every lifecycle path) — the
+web UI's **Try with sample data** button runs these two files:
 
 ```bash
 .venv/bin/python demo/make_demo.py
@@ -135,12 +188,18 @@ Refresh it from the RBA when a leg falls after its last date — or simply
 whenever your files end after it:
 
 ```bash
-curl -o data/rba_f11.csv https://www.rba.gov.au/statistics/tables/csv/f11.1-data.csv
+.venv/bin/python rba_refresh.py
 ```
 
-On Windows PowerShell use `curl.exe` (plain `curl` is an alias there):
-`curl.exe -o data\rba_f11.csv https://www.rba.gov.au/statistics/tables/csv/f11.1-data.csv`.
-The report shows the coverage it used ("FX source") on every run.
+It downloads the current F11.1 file and replaces `data/rba_f11.csv` only if
+the new file parses, covers a longer range (starting no later, ending later),
+and matches the existing table row for row wherever the two overlap;
+otherwise it keeps the old table and says why. A plain download also works,
+without those checks:
+`curl -o data/rba_f11.csv https://www.rba.gov.au/statistics/tables/csv/f11.1-data.csv`
+(on Windows PowerShell use `curl.exe`, and `data\rba_f11.csv`). The hosted copy
+runs the validated refresh weekly. The report shows the coverage it used
+("FX source") on every run, and the start page's footer shows it too.
 
 ### Troubleshooting
 
@@ -210,7 +269,8 @@ The report shows the coverage it used ("FX source") on every run.
 ## Layout
 
 ```
-app.py            Flask app (binds 127.0.0.1 only)
+app.py            Flask app: local (binds 127.0.0.1) or hosted mode
+rba_refresh.py    validated RBA table refresh (CLI, and the hosted weekly job)
 setup.sh          one-shot environment setup (macOS / Linux)
 setup.ps1         one-shot environment setup (Windows)
 cli.py            command-line runner
@@ -220,10 +280,20 @@ engine/cgt.py     FIFO + CGT engine (the tax logic lives here)
 engine/outputs.py workpaper CSV + ZIP (formula-injection guarded)
 engine/pdf.py     PDF report (reportlab)
 data/rba_f11.csv  bundled RBA F11.1 rate table
+templates/        start page (local and hosted variants)
 static/           drag & drop frontend (no external dependencies)
-demo/             synthetic demo statement generator
+demo/             synthetic demo statements and their generator
 tests/            pytest suite
+Dockerfile        hosted image (gunicorn, non-root)
+deploy/           compose file, gunicorn config, deployment notes
 ```
+
+## Hosting
+
+[`deploy/README.md`](deploy/README.md) describes the hosted deployment: the
+hardened container (read-only root, tmpfs for results, no capabilities, no
+volumes), the Caddy site block, updating, and how to put it behind a
+password later.
 
 ## Limitations / read before relying on it
 
@@ -231,6 +301,11 @@ tests/            pytest suite
   categories (futures, CFDs, bonds, warrants) are excluded with a warning.
 - Assumes capital account (investor). Revenue-account traders need different
   treatment — the tool takes no position on characterisation.
+- Checked so far only against real statements from **USD base-currency**
+  accounts. AUD base-currency accounts are untested; check the figures closely
+  and [report](https://github.com/chrisudf/ibkr-tax-report/issues) anything
+  odd. The issue tracker is public: describe the problem, or reproduce it with
+  the demo files, rather than attaching your statements.
 - Translation needs RBA rates from 3 January 2023 onward (the RBA's current
   F11.1 file). Parcels acquired before then stop the run; older rates are
   published by the RBA as separate historical files, which the tool does not

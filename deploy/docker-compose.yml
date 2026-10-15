@@ -1,0 +1,59 @@
+# Hosted deployment: https://cgt.nomad403.cc (see README.md in this folder).
+#   cd /opt/ibkr-tax-report/deploy
+#   GIT_COMMIT=$(git rev-parse --short HEAD) docker compose up -d --build
+#
+# Joins the shared Caddy's network (deploy_web, owned by the ibkr-portfolio
+# project); Caddy reaches it as ibkr-tax-report:8000. No ports are published
+# on the host, no volumes are mounted, and nothing here touches the Docker
+# socket.
+#
+# The project name and service name must differ from the other projects on
+# deploy_web: their compose folders are also called deploy/ (default project
+# name "deploy"), and a second service called "app" would make Caddy's
+# reverse_proxy app:8000 round-robin between two containers.
+name: ibkr-tax-report
+
+services:
+  ibkr-tax-report:
+    build:
+      context: ..
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-}
+    image: ibkr-tax-report:latest
+    restart: unless-stopped
+    environment:
+      IBKR_TAX_HOSTED: "1"
+      IBKR_TAX_RESULT_TTL_MINUTES: "15"
+      IBKR_TAX_RESULTS_DIR: /results
+      IBKR_TAX_MAX_UPLOAD_MB: "10"
+      IBKR_TAX_RATE_LIMIT: "10/60,60/3600"
+      IBKR_TAX_PROXY_HOPS: "1"            # exactly one proxy (Caddy) in front
+      IBKR_TAX_RBA_DIR: /rba
+      IBKR_TAX_RBA_REFRESH_HOURS: "168"   # weekly
+      TZ: Australia/Sydney
+    read_only: true
+    tmpfs:
+      # RAM-backed and gone on restart. uid/gid = the image's app user.
+      - /results:size=64m,mode=0700,uid=10001,gid=10001
+      - /rba:size=4m,mode=0700,uid=10001,gid=10001
+      - /tmp:size=16m,mode=1777
+    # The droplet has 1 vCPU and 1 GB shared with the IBKR panel and sec-downloader.
+    # Over the limit only this container is killed.
+    mem_limit: 256m
+    memswap_limit: 256m      # = mem_limit: no swap, so uploads and results never reach the swapfile
+    cpus: 0.75
+    pids_limit: 128
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks: [web]
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "3"
+
+networks:
+  web:
+    external: true
+    name: deploy_web

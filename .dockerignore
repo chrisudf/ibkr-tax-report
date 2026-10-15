@@ -1,0 +1,13 @@
+.git
+.gitignore
+.claude
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+out
+tests
+*.md
+setup.sh
+setup.ps1
