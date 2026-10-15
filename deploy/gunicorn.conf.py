@@ -20,6 +20,10 @@ accesslog = None
 errorlog = "-"
 loglevel = "info"
 
+# gunicorn 25+ opens a control socket under $HOME by default; the app user has
+# no home and the root filesystem is read-only, so it only logs an error.
+control_socket_disable = True
+
 
 def post_worker_init(worker):
     # start the result sweeper and RBA refresher in the serving process

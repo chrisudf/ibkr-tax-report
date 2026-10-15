@@ -286,6 +286,7 @@ demo/             synthetic demo statements and their generator
 tests/            pytest suite
 Dockerfile        hosted image (gunicorn, non-root)
 deploy/           compose file, gunicorn config, deployment notes
+LESSONS.md        problems met so far, their causes, and what we do now
 ```
 
 ## Hosting
