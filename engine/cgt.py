@@ -254,6 +254,15 @@ class FifoResult:
     warnings: list[str] = field(default_factory=list)
 
 
+def _is_presplit_contract(sym: str, ev: SplitEvent) -> bool:
+    """True when option `sym` is the contract that option split `ev` turns into
+    ev.new_symbol: same underlying, expiry and right, strike = new strike x
+    ratio (IBKR prints the new strike to the cent: 80 / 3 shows as 26.67)."""
+    new, p = parse_option_symbol(ev.new_symbol or ""), parse_option_symbol(sym)
+    return bool(new and p) and p[0] == new[0] and p[1] == new[1] and p[3] == new[3] \
+        and abs(p[2] - new[2] * ev.ratio) <= 0.05 * ev.ratio
+
+
 def _apply_split(books: dict, ev: SplitEvent, warnings: list[str]) -> None:
     if ev.category == "Stocks":
         key = (ev.category, ev.old_symbol)
@@ -268,16 +277,8 @@ def _apply_split(books: dict, ev: SplitEvent, warnings: list[str]) -> None:
     if not parsed:
         warnings.append(f"option split target unparseable: {ev.new_symbol}")
         return
-    under, exp, new_strike, right = parsed
-    target_strike = new_strike * ev.ratio
-    candidates = []
-    for (cat, sym), lots in books.items():
-        if cat != ev.category or not lots:
-            continue
-        p = parse_option_symbol(sym)
-        if p and p[0] == under and p[1] == exp and p[3] == right \
-                and abs(p[2] - target_strike) <= 0.05 * ev.ratio:
-            candidates.append((cat, sym))
+    candidates = [(cat, sym) for (cat, sym), lots in books.items()
+                  if cat == ev.category and lots and _is_presplit_contract(sym, ev)]
     if len(candidates) != 1:
         warnings.append(
             f"option split could not be matched to exactly one open contract "
@@ -408,7 +409,7 @@ class Options:
     account_mask: bool = False
 
 
-def _normalize_symbol_renames(stmt: Statement) -> list[str]:
+def _normalize_symbol_renames(stmt: Statement, splits: list[SplitEvent]) -> list[str]:
     """Unify symbols renamed mid-period (e.g. ticker changes) using the
     Financial Instrument Information conid mapping.
 
@@ -420,11 +421,24 @@ def _normalize_symbol_renames(stmt: Statement) -> list[str]:
     IBKR's realized P/L while the open leg is still carried as a written
     position at 30 June — the same premium counted twice, in both directions.
     So the ticker renames established at stock level are also applied to the
-    underlying token of every option symbol seen in the statement."""
+    underlying token of every option symbol seen in the statement.
+
+    An option split is not a rename. One conid can be listed under its pre-split
+    terms in one file's instrument info and its post-split terms in another's
+    ("NVDL 10JUL26 80 P" / "NVDL 10JUL26 26.67 P"); renaming here would carry the
+    old contract count across and leave the split nothing to match, so the
+    extra contracts would close unmatched against IBKR's P/L. Those pairs are
+    left to _apply_split, which renames and multiplies the quantity. The split
+    events themselves are keyed by symbol, so the ticker renames found here are
+    applied to them as well."""
     notes = []
     rename: dict[str, str] = {}
+    option_splits = [ev for ev in splits if ev.category == "Equity and Index Options"]
     for conid, syms in stmt.conid_symbols.items():
         if len(syms) < 2:
+            continue
+        if any(ev.new_symbol in syms and all(s == ev.new_symbol or _is_presplit_contract(s, ev)
+                                             for s in syms) for ev in option_splits):
             continue
         # The instrument info names the current symbol outright; everything
         # below is a fallback for statements that leave the column empty.
@@ -471,8 +485,27 @@ def _normalize_symbol_renames(stmt: Statement) -> list[str]:
         for p in stmt.open_positions:
             if p.symbol in rename:
                 p.symbol = rename[p.symbol]
+        for ev in splits:
+            if ev.category == "Stocks":
+                ev.old_symbol = rename.get(ev.old_symbol, ev.old_symbol)
+                ev.new_symbol = rename.get(ev.new_symbol, ev.new_symbol)
+            else:
+                root, sep, rest = (ev.new_symbol or "").partition(" ")
+                if sep and root in underlying_rename:
+                    ev.new_symbol = f"{underlying_rename[root]} {rest}"
         for old, new in sorted(rename.items()):
-            notes.append(f"symbol change unified via conid: {old} -> {new}")
+            po, pn = parse_option_symbol(old), parse_option_symbol(new)
+            if po and pn and po[1:] != pn[1:]:
+                # Not a ticker change: the contract itself was adjusted, and no
+                # split in the data says by how much.
+                notes.append(
+                    f"option contract terms changed with no matching corporate action in the "
+                    f"uploaded data: {old} -> {new} (one IBKR conid). Treated as one contract "
+                    "with the number of contracts unchanged; if the adjustment (e.g. a split) "
+                    "changed it, this contract's figures are wrong — upload the statement that "
+                    "covers the adjustment, or review manually.")
+            else:
+                notes.append(f"symbol change unified via conid: {old} -> {new}")
     return notes
 
 
@@ -610,7 +643,10 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
         raise EngineError(f"unknown entity type {opts.entity!r}")
     discount_rate = ENTITY_DISCOUNT[opts.entity]
 
-    warnings.extend(_normalize_symbol_renames(stmt))
+    # Planned before the renames: a contract that one file names before an option
+    # split and another after it must be left for the split to adjust.
+    splits, ca_warnings = plan_corporate_actions(stmt)
+    warnings.extend(_normalize_symbol_renames(stmt, splits))
 
     # Data coverage vs requested FY
     if stmt.period_start and stmt.period_start > fy_start:
@@ -636,7 +672,6 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
         warnings.append(f"{n} {cat} trades excluded — asset category not supported; "
                         "handle manually.")
 
-    splits, ca_warnings = plan_corporate_actions(stmt)
     warnings.extend(ca_warnings)
 
     trades = stmt.trades

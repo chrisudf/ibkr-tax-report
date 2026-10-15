@@ -392,6 +392,101 @@ def test_ticker_rename_leaves_unrelated_options_alone():
     assert rep["d2_open"][0]["symbol"] == "NVDA 02JUL26 185 P"
 
 
+XYZ_SPLIT = ["Corporate Actions", "Data", OPT, "USD", "2026-06-26", "2026-06-26, 10:25:00",
+             "XYZ(US0000000001) Split 3 for 1 (XYZ   260710P00016670, XYZ 10JUL26 16.67 P, )",
+             -4, 0, 0, 0, ""]
+XYZ_WRITE = trade(OPT, "XYZ 10JUL26 50 P", "2026-06-23, 10:00:00", -2, 400, -2, code="O")
+XYZ_PRE, XYZ_POST = "XYZ   260710P00050000", "XYZ   260710P00016670"   # instrument-info names
+
+
+def _split_files(fy_name, cross_name, closing):
+    """An FY Activity Statement and a cross-30-June one whose instrument info
+    names the same option conid by different terms, as IBKR's exports can."""
+    fy = statement("July 1, 2025 - June 30, 2026", "2026-07-05, 09:00:00 AEST",
+                   trades=[XYZ_WRITE, *(t for t in closing if t[6] < "2026-07")],
+                   corporate_actions=[XYZ_SPLIT],
+                   instrument_info=[instrument(OPT, fy_name, "900000001", "XYZ")])
+    cross = statement("November 11, 2025 - August 14, 2026", "2026-08-15, 09:00:00 AEST",
+                      trades=[XYZ_WRITE, *closing], corporate_actions=[XYZ_SPLIT],
+                      instrument_info=[instrument(OPT, cross_name, "900000001", "XYZ")])
+    return merge_statements([parse_statement(fy, "fy.csv"), parse_statement(cross, "c.csv")])
+
+
+XYZ_EXPIRE = trade(OPT, "XYZ 10JUL26 16.67 P", "2026-07-10, 16:20:00", 6, 0, 0,
+                   basis="-398", rpl="398", code="C;Ep")
+
+
+@pytest.mark.parametrize("fy_name,cross_name", [
+    (XYZ_POST, XYZ_PRE), (XYZ_PRE, XYZ_POST), (f"{XYZ_PRE}, {XYZ_POST}", XYZ_PRE)])
+def test_option_split_not_taken_for_rename_when_files_name_it_differently(fy_name, cross_name):
+    """One file names the split contract by its old strike, the other by its new
+    one. That is the split, not a ticker change: the 2 written contracts become 6,
+    and all 6 expiring in July match the written lot."""
+    rep = compute_tax_report(_split_files(fy_name, cross_name, [XYZ_EXPIRE]),
+                             Options(fy_end_year=2026), FX)
+    assert not any("could not be matched" in w or "conid: XYZ" in w for w in rep["warnings"])
+    (d2,) = rep["d2_open"]
+    assert (d2["symbol"], d2["qty"], d2["write_date"]) == ("XYZ 10JUL26 16.67 P", -6, "2026-06-23")
+    assert d2["premium_aud"] == pytest.approx(571.51)           # 398 / 0.6964 (23 Jun 2026)
+
+    rep = compute_tax_report(_split_files(fy_name, cross_name, [XYZ_EXPIRE]),
+                             Options(fy_end_year=2027), FX)
+    assert not rep["unmatched"]
+    (lot,) = rep["closed_lots"]
+    assert lot["qty"] == 6 and lot["gain_aud"] == 0              # premium was FY2025-26's D2
+    assert rep["summary"]["net_capital_gain_18A"] == 0
+
+
+def test_option_split_with_differing_names_closed_in_the_same_year():
+    """Bought back before 30 June: the failed split would have hit the year itself."""
+    buyback = trade(OPT, "XYZ 10JUL26 16.67 P", "2026-06-29, 10:00:00", 6, -120, -6,
+                    basis="-398", rpl="272", code="C")
+    rep = compute_tax_report(_split_files(XYZ_POST, XYZ_PRE, [buyback]),
+                             Options(fy_end_year=2026), FX)
+    assert not rep["unmatched"]
+    (lot,) = rep["closed_lots"]
+    assert lot["qty"] == 6
+    # 398 / 0.6964 (23 Jun) - 126 / 0.6896 (29 Jun) = 571.51 - 182.71
+    assert lot["gain_aud"] == pytest.approx(388.80, abs=0.01)
+    assert rep["summary"]["net_capital_gain_18A"] == pytest.approx(388.80, abs=0.01)
+    assert rep["reconciliation"]["rows_ok"] == rep["reconciliation"]["rows_checked"] == 1
+
+
+def test_option_terms_change_without_corporate_action_is_flagged():
+    """A strike change with no split in the data to explain it: still unified (as
+    before), contract count unchanged, but said plainly — not as a ticker change."""
+    rep = run([
+        trade(OPT, "ABC 10JUL26 50 P", "2026-06-23, 10:00:00", -2, 400, -2, code="O"),
+        trade(OPT, "ABC 10JUL26 16.67 P", "2026-06-29, 10:00:00", 2, -120, -6,
+              basis="-398", rpl="272", code="C"),
+    ], instrument_info=[instrument(OPT, "ABC   260710P00050000, ABC   260710P00016670",
+                                   "900000002", "ABC")])
+    assert any(w.startswith("option contract terms changed with no matching corporate action")
+               and "ABC 10JUL26 50 P -> ABC 10JUL26 16.67 P" in w for w in rep["warnings"])
+    assert not any(w.startswith("symbol change unified via conid: ABC") for w in rep["warnings"])
+    (lot,) = rep["closed_lots"]
+    assert lot["qty"] == 2 and lot["gain_aud"] == pytest.approx(388.80, abs=0.01)
+
+
+def test_stock_split_under_old_ticker_reaches_renamed_lots():
+    """The split is reported under the ticker of the day; the lots were renamed to
+    the current ticker by conid before FIFO, so the split must be renamed too."""
+    ca = [["Corporate Actions", "Data", "Stocks", "USD", "2025-10-01", "2025-10-01, 20:25:00",
+           "OLDT(US0000000002) Split 2 for 1 (OLDT, EXAMPLE CORP, US0000000002)",
+           10, 0, 0, 0, ""]]
+    rep = run([
+        trade("Stocks", "OLDT", "2025-08-01, 10:00:00", 10, -1000, -1, code="O"),
+        trade("Stocks", "NEWT", "2026-02-02, 10:00:00", -20, 1500, -1,
+              basis="-1001", rpl="498", code="C"),
+    ], corporate_actions=ca,
+       instrument_info=[instrument("Stocks", "NEWT, OLDT", "900000003", underlying="NEWT")])
+    assert not rep["unmatched"]
+    (lot,) = rep["closed_lots"]
+    assert (lot["symbol"], lot["qty"]) == ("NEWT", 20)
+    # -1001 / 0.6435 (1 Aug 2025) + 1499 / 0.6942 (2 Feb 2026)
+    assert lot["gain_aud"] == pytest.approx(603.76, abs=0.01)
+
+
 def test_unknown_corporate_action_warns():
     ca = [["Corporate Actions", "Data", "Stocks", "USD", "2026-03-16",
            "2026-03-15, 20:25:00",
