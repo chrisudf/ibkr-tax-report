@@ -160,7 +160,15 @@ METHOD_POINTS = [
      "(CGT event C2, s 104-25)."),
     ("Discount", "Applied only to long parcels acquired at least 12 months before the "
      "CGT event (s 115-25(1)) at the entity's statutory rate, after applying losses "
-     "against non-discountable gains first."),
+     "against non-discountable gains first. Neither the acquisition day nor the event "
+     "day counts (Acts Interpretation Act 1901 s 2G): bought 28 February 2023, the "
+     "first discountable day is 1 March 2024."),
+    ("Gains and losses", "Each CGT event is counted on its own in total gains (18H) and "
+     "losses: an option written and bought back in the same year is a D2 gain (the "
+     "premium) and a separate capital loss (the buy-back), as when the two fall in "
+     "different years. 18A is the same as with one net figure per contract, which is "
+     "shown for comparison. Current-year losses are applied before prior-year ones "
+     "(s 102-5)."),
     ("Foreign currency (Div 775)", "Non-AUD cash is a right to receive (credit balance) "
      "or an obligation to pay (debit balance) foreign currency. Spending, converting or "
      "withdrawing it is forex realisation event 2 (s 775-45); paying back a debit balance "
@@ -236,9 +244,14 @@ def build_pdf(report: dict) -> bytes:
         ("Current-year gains subtotal — strict ATO view", s["strict_subtotal"]),
         ("Prior-year losses carried in", s["carried_losses_input"]),
         ("Losses applied (non-discountable gains first)", s["losses_applied_total"]),
+        ("    of which current-year losses — CGT schedule item 2, label B",
+         s["current_year_losses_applied"]),
+        ("    of which prior-year net losses — item 2, label C", s["carried_losses_applied"]),
         (f"CGT discount applied ({_rate_label(s['discount_rate'])} of remaining eligible gains)",
          s["discount_applied"]),
         ("Total current-year capital gains — label 18H", s["total_capital_gains_18H"]),
+        ("    for comparison: written options netted against their buy-backs",
+         s["total_capital_gains_net_basis"]),
         ("NET CAPITAL GAIN — label 18A", s["net_capital_gain_18A"]),
         ("Capital losses carried forward — label 18V", s["losses_carried_forward_18V"]),
         ("For comparison only: closed-basis (deferred) net", s["deferred_alternative"]),
@@ -290,6 +303,8 @@ def build_pdf(report: dict) -> bytes:
         rows = report.get(key) or []
         if not rows and key in ("transfers", "unmatched", "fx_realisations"):
             continue
+        # the landscape page has no room for it; the CSV keeps it
+        cols = [c for c in cols if c != "discount_from"]
         el.append(PageBreak())
         el.append(Paragraph(f"{title} — {len(rows)} rows", styles["h2"]))
         if rows:

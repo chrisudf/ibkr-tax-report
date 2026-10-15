@@ -95,13 +95,23 @@ def detect_fy(stmt) -> int | None:
     return max(finished) if finished else max(years)
 
 
+def discount_from(open_d: date) -> date:
+    """The first day a CGT event on an asset acquired on open_d can be
+    discounted: it must be acquired at least 12 months before the event
+    (s 115-25(1)). Neither the day of acquisition nor the event day counts, so
+    the 12 months run from the next day and end the day before its anniversary
+    (Acts Interpretation Act 1901 s 2G); the event must fall on or after that
+    anniversary. Bought on 28 February 2023: 1 March 2024, not 29 February."""
+    start = open_d + timedelta(days=1)
+    try:
+        return start.replace(year=start.year + 1)
+    except ValueError:  # starts on 29 Feb
+        return date(start.year + 1, 3, 1)
+
+
 def held_12_months(open_d: date, close_d: date) -> bool:
     """s 115-25(1): asset acquired at least 12 months before the CGT event."""
-    try:
-        anniversary = open_d.replace(year=open_d.year + 1)
-    except ValueError:  # 29 Feb
-        anniversary = open_d.replace(year=open_d.year + 1, day=28)
-    return close_d > anniversary
+    return close_d >= discount_from(open_d)
 
 
 _OPT_RE = re.compile(r"^(?P<under>[A-Z0-9.]+)\s+(?P<exp>\d{2}[A-Z]{3}\d{2})\s+"
@@ -901,6 +911,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     tot = dict(gains_disc=0.0, gains_nondisc=0.0, losses=0.0, net=0.0)
     prior_written_notes = []
     pre_closed, pre_unresolved, pre_maybe_this_fy = [], [], []
+    written_closed = dict(n=0, premiums=0.0, buybacks=0.0, net_gains=0.0)
     for m in res.matches:
         close_d = m.close_dt.date()
         if not (fy_start <= close_d <= fy_end):
@@ -963,15 +974,33 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
             m.aud_gain = g
             disc = (not m.short) and g > 0 and held_12_months(open_d, close_d)
             note = ""
-        if g >= 0:
-            tot["gains_disc" if disc else "gains_nondisc"] += g
-        else:
-            tot["losses"] += g
+        parts = [g]
+        if m.short and is_option and fy_of(open_d) == opts.fy_end_year:
+            # Written and closed in the same year: two CGT events. Granting is D2
+            # (the premium, s 104-40(2)); buying it back is a capital loss of its
+            # own. Counted gross in total gains and losses — the same as when the
+            # two fall in different years. 18A is the same either way; the net
+            # per contract is kept for comparison.
+            parts = [aud_open + m.open_aud_adj, aud_close + m.close_aud_adj]
+            written_closed["n"] += 1
+            written_closed["premiums"] += parts[0]
+            written_closed["buybacks"] += parts[1]
+            written_closed["net_gains"] += max(g, 0.0)
+            note = (f"D2 gain A${parts[0]:,.2f} (premium) and buy-back A${parts[1]:,.2f} are "
+                    "separate CGT events; counted gross")
+        for part in parts:
+            if part >= 0:
+                tot["gains_disc" if disc else "gains_nondisc"] += part
+            else:
+                tot["losses"] += part
         tot["net"] += g
         closed_rows.append(dict(
             category=m.category, symbol=m.symbol, currency=m.currency,
             qty=round(m.qty, 4), open_date=str(open_d), close_date=str(close_d),
             days_held=(close_d - open_d).days,
+            # a day count cannot tell whether 12 months have passed (365 days may
+            # not be enough); this is the first day the discount applies
+            discount_from="" if m.short else str(discount_from(open_d)),
             open_cash=round(m.open_cash, 2), close_cash=round(m.close_cash, 2),
             open_fx=m.open_fx, close_fx=m.close_fx,
             gain_native=round(m.gain_native, 2), gain_aud=round(g, 2),
@@ -980,6 +1009,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
 
     # ---------------- unmatched closes ----------------
     unmatched_rows, unmatched_total_aud, unresolved_count = [], 0.0, 0
+    unmatched_gains = unmatched_losses = 0.0
     for u in res.unmatched:
         close_d = u.trade.dt.date()
         in_fy = fy_start <= close_d <= fy_end
@@ -1000,6 +1030,11 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
             aud_g, fxr = 0.0, 0.0
         else:
             continue
+        if in_fy and (u.resolved or u.written):
+            if aud_g >= 0:
+                unmatched_gains += aud_g
+            else:
+                unmatched_losses += aud_g
         unmatched_rows.append(dict(
             category=u.trade.category, symbol=u.trade.symbol, currency=u.trade.currency,
             close_date=str(close_d), qty=round(u.qty_unmatched, 4),
@@ -1021,9 +1056,8 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     if unresolved_count:
         warnings.append(f"{unresolved_count} unmatched closing trades could NOT be resolved and "
                         "are EXCLUDED from totals — resolve manually.")
-    tot["gains_nondisc"] += max(unmatched_total_aud, 0.0) if unmatched_total_aud >= 0 else 0.0
-    if unmatched_total_aud < 0:
-        tot["losses"] += unmatched_total_aud
+    tot["gains_nondisc"] += unmatched_gains
+    tot["losses"] += unmatched_losses
     tot["net"] += unmatched_total_aud
 
     # ---------------- D2: written options open at FY end ----------------
@@ -1285,6 +1319,10 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     net_capital_gain = (gains_nondisc - use_nd) + disc_base - discount_amt
     total_gains_18h = gains_disc + gains_nondisc         # ATO 18H: total current-year gains
     strict_subtotal = tot["net"] + d2_total
+    # Current-year losses are applied before any carried in (s 102-5, steps 1
+    # and 2): CGT schedule item 2, labels B and C.
+    current_applied = min(losses_current, gains_disc + gains_nondisc)
+    carried_applied = (use_nd + use_d) - current_applied
 
     summary = dict(
         fy=fy_label(opts.fy_end_year), entity=opts.entity,
@@ -1298,12 +1336,20 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
         strict_subtotal=round(strict_subtotal, 2),
         deferred_alternative=round(tot["net"], 2),
         current_year_losses=round(losses_current, 2),
-        carried_losses_applied=round(min(opts.carried_losses, use_nd + use_d), 2),
+        current_year_losses_applied=round(current_applied, 2),
+        carried_losses_applied=round(carried_applied, 2),
         carried_losses_input=round(opts.carried_losses, 2),
         losses_applied_total=round(use_nd + use_d, 2),
         discount_applied=round(discount_amt, 2),
         net_capital_gain_18A=round(net_capital_gain, 2),
         total_capital_gains_18H=round(total_gains_18h, 2),
+        # For comparison: each option written and closed in the year netted
+        # against its buy-back, as one result per contract.
+        total_capital_gains_net_basis=round(
+            total_gains_18h - written_closed["premiums"] + written_closed["net_gains"], 2),
+        written_options_closed=dict(
+            count=written_closed["n"], premiums_aud=round(written_closed["premiums"], 2),
+            buybacks_aud=round(written_closed["buybacks"], 2)),
         losses_carried_forward_18V=round(rem_losses, 2),
         other_income=dict(
             dividends_aud=div_aud, withholding_tax_aud=wht_aud,

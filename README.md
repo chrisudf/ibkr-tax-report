@@ -314,7 +314,18 @@ runs the validated refresh weekly. The report shows the coverage it used
   folded premium is translated at the rate on the day the option was written.
 - Purchased options expiring worthless: capital loss at expiry (C2, s 104-25).
 - 12-month CGT discount by entity (individual/trust 50%, complying SMSF 33⅓%,
-  company nil), losses applied against non-discountable gains first.
+  company nil), losses applied against non-discountable gains first. Neither
+  the day of acquisition nor the day of the event counts towards the 12 months
+  (Acts Interpretation Act 1901 s 2G); the workpaper's `discount_from` column
+  gives the first day a parcel's sale is discountable, since a day count can
+  mislead (365 days is not always 12 months).
+- **Each CGT event counts on its own** in total gains (18H) and losses. An
+  option written and bought back in the same year is a D2 gain (the premium)
+  plus a separate capital loss (the buy-back), as when the two fall in
+  different years. 18A is the same as with one net figure per contract, which
+  the workpaper shows for comparison. Current-year losses are applied before
+  prior-year ones (s 102-5), and the split is shown as CGT schedule item 2
+  labels B and C.
 - Corporate actions (splits, incl. option contract renames) parsed from the
   statement's Corporate Actions section; anything unrecognised becomes a
   warning, never a silent guess. Ticker changes are unified via IBKR conids.

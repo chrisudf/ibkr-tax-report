@@ -36,7 +36,8 @@ def _is_numberish(s: str) -> bool:
 TABLES = {
     "closed_lots": (
         ["category", "symbol", "currency", "qty", "open_date", "close_date", "days_held",
-         "open_cash", "close_cash", "open_fx", "close_fx", "gain_native", "gain_aud",
+         "discount_from", "open_cash", "close_cash", "open_fx", "close_fx", "gain_native",
+         "gain_aud",
          "short", "expiry", "discount_eligible", "note"],
         "Closed parcels — CGT events realised in the financial year (FIFO matched)"),
     "d2_open": (
@@ -117,9 +118,14 @@ def build_workpaper_csv(report: dict) -> str:
         ("deferred_alternative", "Alternative: closed-basis only (deferred view, for comparison)"),
         ("current_year_losses", "Current-year capital losses (component)"),
         ("carried_losses_input", "Prior-year losses carried in (user input)"),
+        ("current_year_losses_applied",
+         "  of which current-year losses (CGT schedule item 2, label B)"),
+        ("carried_losses_applied", "  of which prior-year net losses (item 2, label C)"),
         ("losses_applied_total", "Losses applied"),
         ("discount_applied", "CGT discount applied"),
         ("total_capital_gains_18H", "Total current-year capital gains (label 18H)"),
+        ("total_capital_gains_net_basis",
+         "  for comparison: 18H with written options netted against their buy-backs"),
         ("net_capital_gain_18A", "NET CAPITAL GAIN (label 18A)"),
         ("losses_carried_forward_18V", "Losses carried forward (label 18V)"),
     ]:

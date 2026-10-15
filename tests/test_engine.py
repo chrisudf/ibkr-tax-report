@@ -39,6 +39,19 @@ def test_held_12_months_boundary():
     assert held_12_months(leap, dt.date(2025, 3, 1))
 
 
+def test_12_months_excludes_the_acquisition_and_event_days():
+    """Acts Interpretation Act s 2G: 12 months from the day after acquisition
+    end the day before its anniversary, so the event must be on or after it.
+    The one date that differs from "after the anniversary": bought 28 Feb in
+    the year before a leap year."""
+    from engine.cgt import discount_from
+    assert discount_from(dt.date(2023, 2, 28)) == dt.date(2024, 3, 1)
+    assert not held_12_months(dt.date(2023, 2, 28), dt.date(2024, 2, 29))
+    assert held_12_months(dt.date(2023, 2, 28), dt.date(2024, 3, 1))
+    assert discount_from(dt.date(2024, 8, 15)) == dt.date(2025, 8, 16)
+    assert discount_from(dt.date(2024, 2, 29)) == dt.date(2025, 3, 1)
+
+
 def test_option_symbol_parsing():
     assert parse_option_symbol("NVDL 17JUL26 26.67 P") == ("NVDL", "17JUL26", 26.67, "P")
     assert parse_option_symbol("AAPL") is None
@@ -705,6 +718,35 @@ def test_data_starting_after_1_july_warns_that_a_premium_may_be_missing():
                for w in rep["warnings"])
 
 
+def test_option_written_and_bought_back_in_the_year_counts_gross():
+    """Two CGT events: D2 at grant (the premium) and the buy-back, a capital loss
+    — counted separately in 18H and losses, as across years. 18A unchanged."""
+    rep = run([trade(OPT, "ABC 19DEC25 50 P", "2025-08-06, 10:00:00", -1, 500, -1, code="O"),
+               trade(OPT, "ABC 19DEC25 50 P", "2025-09-15, 10:00:00", 1, -200, -1,
+                     basis="-499", rpl="298", code="C")])
+    s = rep["summary"]
+    premium = FX.to_aud(499, "USD", dt.date(2025, 8, 6))[0]
+    buyback = FX.to_aud(-201, "USD", dt.date(2025, 9, 15))[0]
+    assert s["total_capital_gains_18H"] == pytest.approx(premium, abs=0.01)
+    assert s["closed_losses"] == pytest.approx(buyback, abs=0.01)
+    assert s["net_capital_gain_18A"] == pytest.approx(premium + buyback, abs=0.01)
+    assert s["total_capital_gains_net_basis"] == pytest.approx(premium + buyback, abs=0.01)
+    assert s["written_options_closed"]["count"] == 1
+    assert "separate CGT events" in rep["closed_lots"][0]["note"]
+
+
+def test_unmatched_closes_are_counted_row_by_row():
+    rep = run([trade("Stocks", "OLDG", "2025-09-01, 10:00:00", -10, 6000, 0,
+                     basis="-1000", rpl="5000", code="C"),
+               trade("Stocks", "OLDL", "2025-09-01, 10:00:00", -10, 1000, 0,
+                     basis="-4000", rpl="-3000", code="C")])
+    s = rep["summary"]
+    rate = FX.rate("USD", dt.date(2025, 9, 1))[0]
+    assert s["total_capital_gains_18H"] == pytest.approx(5000 / rate, abs=0.01)
+    assert s["closed_losses"] == pytest.approx(-3000 / rate, abs=0.01)
+    assert s["net_capital_gain_18A"] == pytest.approx(2000 / rate, abs=0.01)
+
+
 # ---------------------------------------------------------------- entities & losses
 
 ENTITY_CASE = [
@@ -751,6 +793,29 @@ def test_carried_losses_and_18v():
     s = rep["summary"]
     assert s["net_capital_gain_18A"] == 0.0
     assert s["losses_carried_forward_18V"] == pytest.approx(10000.0 - s["closed_net"], abs=0.02)
+
+
+@pytest.mark.parametrize("gain_usd,loss_usd,carried,cur_applied,carried_applied", [
+    (5000, 2000, 10000.0, 2000, 3000),   # current-year losses first, then carried ones
+    (1000, 3000, 1944.0, 1000, 0),       # current-year losses alone exceed the gains
+])
+def test_losses_applied_split_into_current_and_prior_year(gain_usd, loss_usd, carried,
+                                                          cur_applied, carried_applied):
+    """s 102-5: current-year capital losses must be applied first (CGT schedule
+    item 2 label B); prior-year net losses only against what is left (label C)."""
+    d1, d2 = dt.date(2025, 9, 1), dt.date(2025, 10, 1)
+    r1, r2 = FX.rate("USD", d1)[0], FX.rate("USD", d2)[0]
+    # amounts chosen so the AUD gain and loss come out at the round figures
+    rep = run([trade("Stocks", "WIN", f"{d1}, 10:00:00", 10, -10000, 0, code="O"),
+               trade("Stocks", "WIN", f"{d2}, 10:00:00", -10, r2 * (10000 / r1 + gain_usd), 0,
+                     code="C"),
+               trade("Stocks", "LOSE", f"{d1}, 10:00:00", 10, -loss_usd * r1, 0, code="O"),
+               trade("Stocks", "LOSE", f"{d2}, 10:00:00", -10, 0, 0, code="C")],
+              carried=carried)
+    s = rep["summary"]
+    assert s["current_year_losses_applied"] == pytest.approx(cur_applied, abs=0.05)
+    assert s["carried_losses_applied"] == pytest.approx(carried_applied, abs=0.05)
+    assert s["losses_applied_total"] == pytest.approx(cur_applied + carried_applied, abs=0.05)
 
 
 # ---------------------------------------------------------------- parser / merge
