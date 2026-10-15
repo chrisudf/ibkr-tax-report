@@ -1,6 +1,7 @@
 """Australian CGT engine for IBKR statements.
 
-Methodology (each point verified against ATO sources; see docs/TAX_RULES.md):
+Methodology (the same rules are described for users in README.md, "What it
+computes", and on the PDF's methodology page):
 
 - FIFO lot matching per (asset category, symbol). IBKR's own default is also
   FIFO, which lets us reconcile per-row against their Realized P/L column.
@@ -19,9 +20,10 @@ Methodology (each point verified against ATO sources; see docs/TAX_RULES.md):
 - If a written option is later exercised/assigned, the D2 gain is disregarded
   (s 104-40(5)) and the premium is folded into the underlying share parcel
   (ss 134-1, 116-65): reduces cost base of shares bought under a put, increases
-  capital proceeds of shares delivered under a call. Assignments that cancel a
-  D2 gain already returned in an earlier year raise an amendment flag
-  (amendment period is unlimited for this event: s 170(10) ITAA 1936).
+  capital proceeds of shares delivered under a call — the premium translated at
+  the rate on the day the option was written. Assignments that cancel a D2 gain
+  returned in an earlier year raise an amendment flag (no time limit for this
+  amendment: s 170(10AA) item 50 ITAA 1936).
 - Long options that expire worthless are a capital loss at expiry (CGT event
   C2, s 104-25).
 - The 12-month CGT discount applies only to long parcels acquired at least 12
@@ -195,6 +197,9 @@ class Lot:
     cash: float               # signed native-currency total for the open leg
     dt: datetime              # acquisition/grant datetime
     currency: str
+    # AUD to add to the open leg's translation: a premium folded into the cash
+    # is translated at its own (grant) date, not this lot's (s 960-50(6) item 5).
+    aud_adj: float = 0.0
     # Held before the uploaded data starts (from IBKR's Mark-to-Market summary):
     # quantity known; opening cash and date are not — the opening cash of the
     # units each closing row takes comes from that row's IBKR Basis instead.
@@ -218,6 +223,8 @@ class Match:
     close_fx: float = 0.0
     pre_data: bool = False    # opened before the uploaded data (open_cash from IBKR's Basis)
     basis_unknown: bool = False
+    open_aud_adj: float = 0.0     # see Lot.aud_adj
+    close_aud_adj: float = 0.0
 
     @property
     def gain_native(self) -> float:
@@ -304,7 +311,8 @@ def run_fifo(trades: list[Trade], splits: list[SplitEvent],
              fold_adjustments: dict[int, float] | None = None,
              suppress_fold_matches: bool = True,
              initial_lots: dict | None = None,
-             data_start: datetime | None = None) -> FifoResult:
+             data_start: datetime | None = None,
+             aud_adjustments: dict[int, float] | None = None) -> FifoResult:
     """One chronological FIFO pass.
 
     fold_adjustments: trade index -> cash to add to that (share) trade's leg,
@@ -313,6 +321,8 @@ def run_fifo(trades: list[Trade], splits: list[SplitEvent],
     (copied, so each pass starts from the same books).
     data_start: when the uploaded data starts — dates an option exercised or
     assigned with no opening lot at all, which was opened before then.
+    aud_adjustments: trade index -> AUD to add to that trade's leg on top of
+    the translation of its cash (premiums folded at their own date).
     """
     res = FifoResult()
     books: dict = defaultdict(list)
@@ -320,6 +330,7 @@ def run_fifo(trades: list[Trade], splits: list[SplitEvent],
         books[key].append(replace(lot))
     res.books = books
     fold_adjustments = fold_adjustments or {}
+    aud_adjustments = aud_adjustments or {}
     split_i = 0
 
     for idx, t in enumerate(trades):
@@ -331,6 +342,7 @@ def run_fifo(trades: list[Trade], splits: list[SplitEvent],
 
         q = t.qty
         cash = t.cash + fold_adjustments.get(idx, 0.0)
+        aud_adj = aud_adjustments.get(idx, 0.0)
         if abs(q) < QTY_EPS:
             continue
         lots = books[(t.category, t.symbol)]
@@ -352,8 +364,10 @@ def run_fifo(trades: list[Trade], splits: list[SplitEvent],
             take = min(abs(remaining), abs(lot.qty))
             open_alloc = lot.cash * (take / abs(lot.qty))
             close_alloc = cash * (take / abs(q))
+            open_adj = lot.aud_adj * (take / abs(lot.qty))
             lot.qty += take if remaining > 0 else -take
             lot.cash -= open_alloc
+            lot.aud_adj -= open_adj
             remaining += take if remaining < 0 else -take
             rem_cash -= close_alloc
             lot_open_dt, lot_pre = lot.dt, lot.pre_data
@@ -371,7 +385,8 @@ def run_fifo(trades: list[Trade], splits: list[SplitEvent],
                     category=t.category, symbol=t.symbol, currency=t.currency,
                     qty=take, open_dt=lot_open_dt, close_dt=t.dt,
                     open_cash=open_alloc, close_cash=close_alloc,
-                    short=q > 0, via_expiry="Ep" in t.codes, pre_data=lot_pre)
+                    short=q > 0, via_expiry="Ep" in t.codes, pre_data=lot_pre,
+                    open_aud_adj=open_adj, close_aud_adj=aud_adj * (take / abs(q)))
                 res.matches.append(taken)
                 my_rpl += open_alloc + close_alloc
             if lot_pre:
@@ -428,7 +443,8 @@ def run_fifo(trades: list[Trade], splits: list[SplitEvent],
                         "figures for the contract are not reliable. Upload the statement that "
                         "covers when the position was opened.")
                 books[(t.category, t.symbol)].append(
-                    Lot(qty=remaining, cash=rem_cash, dt=t.dt, currency=t.currency))
+                    Lot(qty=remaining, cash=rem_cash, dt=t.dt, currency=t.currency,
+                        aud_adj=aud_adj * (abs(remaining) / abs(q))))
 
         if "C" in t.codes and not fold_close and abs(unmatched_qty) < QTY_EPS:
             res.row_checks.append((t, my_rpl))
@@ -791,10 +807,22 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
         warnings.append(
             f"{tr.kind} of {tr.option_symbol} on {tr.dt.date()} has no matching share "
             "trade (cash-settled or missing data) — treated as a normal option close.")
+    # The folded premium keeps its own date's rate (s 960-50(6) item 5): the
+    # share leg's AUD is its cash at the share trade's rate, corrected by the
+    # premium's AUD at the write date less its AUD at that rate. Unknown for an
+    # option opened before the data — it stays at the share trade's rate.
+    aud_adj: dict[int, float] = defaultdict(float)
+    for tr in pass1.transfers:
+        if tr.stock_trade_idx is None or tr.pre_data:
+            continue
+        stock_d = trades[tr.stock_trade_idx].dt.date()
+        aud_adj[tr.stock_trade_idx] += (fx.to_aud(tr.cash, tr.currency, tr.option_open_dt.date())[0]
+                                        - fx.to_aud(tr.cash, tr.currency, stock_d)[0])
     # Pass 2: definitive run with share-leg cash adjusted by folded premiums.
     # Orphan folds (no share leg) fall back to normal matches.
     res = run_fifo(trades, splits, fold_adjustments=fold_adj,
-                   suppress_fold_matches=True, initial_lots=pre_lots, data_start=data_start)
+                   suppress_fold_matches=True, initial_lots=pre_lots, data_start=data_start,
+                   aud_adjustments=dict(aud_adj))
     if orphan_transfers:
         # A fold with no share leg (cash-settled index option, or missing data)
         # reverts to a normal option close: proceeds are the closing trade's cash.
@@ -877,7 +905,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
         else:
             aud_open, m.open_fx = fx.to_aud(m.open_cash, m.currency, open_d)
             aud_close, m.close_fx = fx.to_aud(m.close_cash, m.currency, close_d)
-            g = aud_open + aud_close
+            g = aud_open + m.open_aud_adj + aud_close + m.close_aud_adj
             m.aud_gain = g
             disc = (not m.short) and g > 0 and held_12_months(open_d, close_d)
             note = ""
@@ -1003,7 +1031,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     # from the D2 list silently disagrees with the year-end position snapshot.
     d2_later_assigned = []
     for tr in res.transfers:
-        if tr.pre_data:
+        if tr.pre_data or tr.kind != "assignment":
             continue
         od, td = tr.option_open_dt.date(), tr.dt.date()
         if fy_start <= od <= fy_end and td > fy_end:
@@ -1044,7 +1072,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
             + f". Upload a statement starting on or before {fy_start}.")
 
     # Transfers that cancel a prior-year D2 -> amendment flags
-    amendment_flags = []
+    amendment_flags, exercise_notes = [], []
     for tr in res.transfers:
         if tr.pre_data:
             if tr.kind == "assignment" and tr.cash > 0 and fy_start <= tr.dt.date() <= fy_end:
@@ -1058,14 +1086,27 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
                     "the amount worked out.")
             continue
         od = tr.option_open_dt.date()
-        if fy_of(od) < fy_of(tr.dt.date()) and fy_of(tr.dt.date()) == opts.fy_end_year:
-            prem_aud, _ = fx.to_aud(tr.cash, tr.currency, od)
-            amendment_flags.append(
-                f"{tr.option_symbol}: written {od} ({fy_label(fy_of(od))}), "
-                f"{tr.kind} on {tr.dt.date()} — the A${prem_aud:,.2f} D2 gain returned in "
-                f"{fy_label(fy_of(od))} is disregarded (s 104-40(5)); amend that return "
-                "(unlimited amendment period, s 170(10) ITAA 1936). Premium folded into the "
-                f"share parcel {tr.stock_symbol}.")
+        if not (fy_of(od) < fy_of(tr.dt.date()) and fy_of(tr.dt.date()) == opts.fy_end_year):
+            continue
+        if tr.kind != "assignment":
+            exercise_notes.append(
+                f"{tr.option_symbol}: bought {od}, exercised {tr.dt.date()} — its cost is part "
+                f"of the cost base of the {tr.stock_symbol or '(unmatched)'} shares acquired "
+                "on exercise (s 134-1(1) item 1); no D2 gain is involved.")
+            continue
+        prem_aud, _ = fx.to_aud(tr.cash, tr.currency, od)
+        written_fy = fy_label(fy_of(od))
+        # The earlier return may already have left it out: prepared after the
+        # assignment, with a statement that shows it (as this tool does), it
+        # never counted the gain.
+        amendment_flags.append(
+            f"{tr.option_symbol}: written {od} ({written_fy}), assigned on {tr.dt.date()} — "
+            f"if the {written_fy} return counted its A${prem_aud:,.2f} premium as a D2 gain, "
+            "that gain is now disregarded (s 104-40(5)): amend that return; there is no time "
+            "limit for this amendment (s 170(10AA) item 50 ITAA 1936). Nothing to amend if "
+            "that return was prepared after the assignment and already left the gain out, "
+            "as this tool does when the statement runs past the assignment. Premium folded "
+            f"into the share parcel {tr.stock_symbol}.")
 
     # ---------------- transfers (this-FY assignment/exercise folds) --------
     transfer_rows = [dict(option=tr.option_symbol, kind=tr.kind, date=str(tr.dt.date()),
@@ -1092,6 +1133,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
                 continue
             cost_native = -lot.cash
             cost_aud, fxr = fx.to_aud(cost_native, lot.currency, lot.dt.date())
+            cost_aud -= lot.aud_adj
             carry_rows.append(dict(category=cat, symbol=sym, qty=round(lot.qty, 4),
                                    acquired=str(lot.dt.date()),
                                    cost_native=round(cost_native, 2), currency=lot.currency,
@@ -1236,7 +1278,8 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
         fx_realisations=fx_real_rows,
         forex_notes=forex_notes,
         amendment_flags=amendment_flags,
-        cross_year_notes=prior_written_notes + d2_later_closed + d2_later_assigned,
+        cross_year_notes=prior_written_notes + d2_later_closed + d2_later_assigned
+        + exercise_notes,
         other_income=dict(dividends=div_rows, withholding_tax=wht_rows, interest=int_rows,
                           fees=fee_rows, borrow_fees=bor_rows, forex_pl=fxp_rows),
         reconciliation=dict(

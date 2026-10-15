@@ -145,6 +145,70 @@ def test_assignment_of_prior_year_written_flags_amendment():
     assert "FY2024-25" in rep["amendment_flags"][0]
 
 
+def test_amendment_flag_is_conditional_and_cites_s_170_10aa():
+    """The earlier return may already have left the gain out (prepared after
+    the assignment with a statement showing it) — then there is nothing to
+    amend. The no-time-limit rule is s 170(10AA) item 50 ITAA 1936."""
+    rep = run([
+        trade(OPT, "PFE 21NOV25 25 P", "2025-06-06, 10:00:00", -1, 80, -1, code="O"),
+        trade(OPT, "PFE 21NOV25 25 P", "2025-11-22, 16:20:00", 1, 0, 0, code="A;C"),
+        trade("Stocks", "PFE", "2025-11-22, 16:20:00", 100, -2500, 0, code="A;O"),
+    ], period="July 1, 2024 - June 30, 2026")
+    (flag,) = rep["amendment_flags"]
+    assert "if the FY2024-25 return counted" in flag
+    assert "s 170(10AA) item 50 ITAA 1936" in flag and "s 170(10) " not in flag
+    assert "Nothing to amend if" in flag
+
+
+def test_exercise_of_a_bought_option_across_years_is_not_a_d2_amendment():
+    """D2 is the grantor's event: exercising a call you bought is not an
+    assignment and cancels no D2 gain (s 104-40(1), (5))."""
+    rep = run([
+        trade(OPT, "LLL 16JAN26 100 C", "2025-05-02, 10:00:00", 1, -1500, -1, code="O"),
+        trade(OPT, "LLL 16JAN26 100 C", "2026-01-17, 16:20:00", -1, 0, 0, code="C;Ex"),
+        trade("Stocks", "LLL", "2026-01-17, 16:20:00", 100, -10000, 0, code="Ex;O"),
+    ], period="July 1, 2024 - June 30, 2026")
+    assert rep["amendment_flags"] == []
+    (note,) = [n for n in rep["cross_year_notes"] if n.startswith("LLL 16JAN26 100 C")]
+    assert "bought 2025-05-02, exercised 2026-01-17" in note and "s 134-1(1) item 1" in note
+    assert "D2 gain is involved" in note
+
+
+def test_folded_premium_is_translated_at_the_write_date_rate():
+    """s 960-50(6) item 5: the premium is an amount of its own day. The shares'
+    cost is the strike at the assignment-date rate less the premium at the
+    write-date rate — not the net cash at the assignment-date rate."""
+    rep = run([
+        trade(OPT, "PFE 21NOV25 25 P", "2025-08-06, 10:00:00", -1, 80, -1, code="O"),
+        trade(OPT, "PFE 21NOV25 25 P", "2025-11-22, 16:20:00", 1, 0, 0, code="A;C"),
+        trade("Stocks", "PFE", "2025-11-22, 16:20:00", 100, -2500, 0, code="A;O"),
+    ])
+    (cf,) = [r for r in rep["carry_forward"] if r["symbol"] == "PFE"]
+    assert cf["cost_native"] == pytest.approx(2421.0)
+    strike_aud = FX.to_aud(2500, "USD", dt.date(2025, 11, 22))[0]
+    premium_aud = FX.to_aud(79, "USD", dt.date(2025, 8, 6))[0]
+    assert cf["cost_aud"] == pytest.approx(strike_aud - premium_aud, abs=0.01)
+    assert cf["cost_aud"] != pytest.approx(FX.to_aud(2421, "USD", dt.date(2025, 11, 22))[0],
+                                           abs=0.01)
+
+
+def test_folded_premium_into_call_proceeds_uses_the_write_date_rate():
+    """Shares delivered under a written call: capital proceeds include the
+    premium (s 116-65), at the rate on the day the call was written."""
+    rep = run([
+        trade("Stocks", "QQQ", "2025-07-10, 10:00:00", 100, -5000, 0, code="O"),
+        trade(OPT, "QQQ 21NOV25 60 C", "2025-08-06, 10:00:00", -1, 150, -1, code="O"),
+        trade(OPT, "QQQ 21NOV25 60 C", "2025-11-22, 16:20:00", 1, 0, 0, code="A;C"),
+        trade("Stocks", "QQQ", "2025-11-22, 16:20:00", -100, 6000, 0,
+              basis="-5000", rpl="1000", code="A;C"),
+    ])
+    (lot,) = [r for r in rep["closed_lots"] if r["symbol"] == "QQQ"]
+    expected = (FX.to_aud(-5000, "USD", dt.date(2025, 7, 10))[0]
+                + FX.to_aud(6000, "USD", dt.date(2025, 11, 22))[0]
+                + FX.to_aud(149, "USD", dt.date(2025, 8, 6))[0])
+    assert lot["gain_aud"] == pytest.approx(expected, abs=0.01)
+
+
 def test_assignment_after_fy_end_is_noted_not_returned_as_d2():
     """Written in-FY, assigned in the next one: s 104-40(5) disregards the D2
     gain, so nothing is returned — but the contract was open at 30 June and its

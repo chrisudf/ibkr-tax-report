@@ -154,7 +154,8 @@ METHOD_POINTS = [
      "parcel — reducing cost base of shares acquired under a put (s 134-1) or increasing "
      "capital proceeds of shares delivered under a call (s 116-65). Assignments that "
      "cancel a D2 gain returned in an earlier year are flagged for amendment "
-     "(unlimited amendment period: s 170(10) ITAA 1936)."),
+     "(no time limit for that amendment: s 170(10AA) item 50 ITAA 1936). The premium "
+     "is translated at the rate on the day the option was written."),
     ("Expiries", "Purchased options expiring worthless are a capital loss at expiry "
      "(CGT event C2, s 104-25)."),
     ("Discount", "Applied only to long parcels acquired at least 12 months before the "

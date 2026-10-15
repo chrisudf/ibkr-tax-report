@@ -302,7 +302,10 @@ runs the validated refresh weekly. The report shows the coverage it used
   strict figure stands and a warning lists the contracts and amounts.
 - **Assignment/exercise**: D2 disregarded (s 104-40(5)); premium folded into
   the share parcel (ss 134-1 / 116-65). Assignments cancelling a prior-year D2
-  gain raise an **amendment flag** (s 170(10) ITAA 1936: unlimited period).
+  gain raise an **amendment flag** (no time limit: s 170(10AA) item 50 ITAA 1936).
+  The flag says the amendment is needed only if that return counted the gain —
+  not if it was prepared after the assignment with a statement showing it. The
+  folded premium is translated at the rate on the day the option was written.
 - Purchased options expiring worthless: capital loss at expiry (C2, s 104-25).
 - 12-month CGT discount by entity (individual/trust 50%, complying SMSF 33⅓%,
   company nil), losses applied against non-discountable gains first.
