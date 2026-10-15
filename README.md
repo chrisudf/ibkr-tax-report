@@ -315,7 +315,11 @@ runs the validated refresh weekly. The report shows the coverage it used
   warning, never silently added.
 - **Written options: CGT event D2 at grant** (s 104-40(2)), never discountable
   (s 115-25(3)). Options still open at 30 June are assessable that year
-  ("strict" view); a deferred/closed-basis figure is shown for comparison.
+  ("strict" view); a deferred/closed-basis figure, taxing each option in the
+  year it is closed (premium included), is shown for comparison. Buying a
+  written option back is a capital loss equal to the buy-back cost: the
+  prevailing view, on which the ATO has published no ruling (a private ruling
+  gives certainty).
   When the uploaded data stops before such an option's fate is known, the
   strict figure stands and a warning lists the contracts and amounts.
 - **Assignment/exercise**: D2 disregarded (s 104-40(5)); premium folded into

@@ -152,8 +152,10 @@ METHOD_POINTS = [
      "commissions), valid for long and short parcels."),
     ("Written options", "CGT event D2 at the date of grant (s 104-40(2)). Premiums on "
      "written options still open at 30 June are assessable in this year; the discount "
-     "never applies to D2 gains (s 115-25(3)). A deferred/closed-basis alternative is "
-     "shown for comparison only."),
+     "never applies to D2 gains (s 115-25(3)). Buying one back is a capital loss equal "
+     "to the buy-back cost — the prevailing view, on which the ATO has published no "
+     "ruling (a private ruling gives certainty). A deferred/closed-basis alternative, "
+     "taxing each option in the year it is closed, is shown for comparison only."),
     ("Assignment / exercise", "The D2 gain is disregarded when a written option is "
      "exercised or assigned (s 104-40(5)); the premium is instead folded into the share "
      "parcel — reducing cost base of shares acquired under a put (s 134-1) or increasing "

@@ -1028,6 +1028,11 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     prior_written_notes = []
     pre_closed, pre_unresolved, pre_maybe_this_fy = [], [], []
     written_closed = dict(n=0, premiums=0.0, buybacks=0.0, net_gains=0.0)
+    # The closed-basis comparison counts an option's premium in the year it is
+    # closed. For one written in an earlier year the strict figures count only
+    # the close leg this year (its premium was that year's D2), so the
+    # comparison adds the premium back — otherwise it would appear in no year.
+    deferred_extra = 0.0
     for m in res.matches:
         close_d = m.close_dt.date()
         if not (fy_start <= close_d <= fy_end):
@@ -1079,6 +1084,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
             g = aud_close
             m.aud_gain, m.close_fx = g, fxr
             aud_open, m.open_fx = fx.to_aud(m.open_cash, m.currency, open_d)
+            deferred_extra += aud_open
             note = (f"premium A${aud_open:,.2f} was a D2 gain in {fy_label(fy_of(open_d))}; "
                     f"only the close leg is recognised this year")
             prior_written_notes.append(f"{m.symbol}: {note}")
@@ -1482,7 +1488,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
         d2_open_written=round(d2_total, 2),
         d2_outcome_unknown=round(sum(u[3] for u in d2_unresolved), 2),
         strict_subtotal=round(strict_subtotal, 2),
-        deferred_alternative=round(tot["net"], 2),
+        deferred_alternative=round(tot["net"] + deferred_extra, 2),
         current_year_losses=round(losses_current, 2),
         current_year_losses_applied=round(current_applied, 2),
         carried_losses_applied=round(carried_applied, 2),

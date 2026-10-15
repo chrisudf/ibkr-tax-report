@@ -118,7 +118,9 @@ def build_workpaper_csv(report: dict) -> str:
         ("closed_net", "Closed parcels net"),
         ("d2_open_written", "D2: written options open at 30 June (premiums at grant date)"),
         ("strict_subtotal", "Current-year gains subtotal (strict ATO view)"),
-        ("deferred_alternative", "Alternative: closed-basis only (deferred view, for comparison)"),
+        ("deferred_alternative", "Alternative: closed-basis only (deferred view, for "
+                                 "comparison) — options taxed in the year closed, premium "
+                                 "included"),
         ("current_year_losses", "Current-year capital losses (component)"),
         ("carried_losses_input", "Prior-year losses carried in (user input)"),
         ("current_year_losses_applied",

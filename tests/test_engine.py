@@ -158,6 +158,21 @@ def test_assignment_of_prior_year_written_flags_amendment():
     assert "FY2024-25" in rep["amendment_flags"][0]
 
 
+def test_closed_basis_comparison_counts_a_prior_year_premium_when_closed():
+    """The strict figures count only the buy-back this year (the premium was
+    last year's D2). The closed-basis comparison must include the premium in
+    the year closed — otherwise it appears in no year at all."""
+    rep = run([trade(OPT, "MSFT 19DEC25 400 P", "2025-06-10, 11:00:00", -1, 500, -0.66, code="O"),
+               trade(OPT, "MSFT 19DEC25 400 P", "2025-09-15, 10:00:00", 1, -200, -0.66,
+                     basis="499.34", rpl="298.68", code="C")],
+              period="July 1, 2024 - June 30, 2026")
+    s = rep["summary"]
+    premium = FX.to_aud(499.34, "USD", dt.date(2025, 6, 10))[0]
+    buyback = FX.to_aud(-200.66, "USD", dt.date(2025, 9, 15))[0]
+    assert s["closed_net"] == pytest.approx(buyback, abs=0.01)
+    assert s["deferred_alternative"] == pytest.approx(premium + buyback, abs=0.01)
+
+
 def test_amendment_flag_is_conditional_and_cites_s_170_10aa():
     """The earlier return may already have left the gain out (prepared after
     the assignment with a statement showing it) — then there is nothing to
