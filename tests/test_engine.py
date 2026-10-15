@@ -838,6 +838,19 @@ def test_cash_items_on_fy_boundaries_included():
     assert not any("dated outside" in w for w in rep["warnings"])
 
 
+def test_carry_forward_is_the_parcels_held_at_30_june():
+    """A statement running past 30 June (file (c)) must not move the parcels
+    carried into next year: sold in July still counts, bought in July does not."""
+    rep = run([trade("Stocks", "HELD", "2025-09-01, 10:00:00", 10, -1000, 0, code="O"),
+               trade("Stocks", "HELD", "2026-07-15, 10:00:00", -10, 1100, 0,
+                     basis="-1000", rpl="100", code="C"),
+               trade("Stocks", "NEWX", "2026-07-20, 10:00:00", 5, -500, 0, code="O")],
+              period="July 1, 2025 - August 14, 2026")
+    assert [(c["symbol"], c["qty"], c["acquired"]) for c in rep["carry_forward"]] == \
+        [("HELD", 10, "2025-09-01")]
+    assert rep["closed_lots"] == []                  # the July sale is next year's
+
+
 def test_statement_past_fy_end_warns():
     rep = run([trade("Stocks", "XYZ", "2025-09-01, 10:00:00", 10, -1000, 0, code="O")],
               period="July 1, 2025 - August 14, 2026")

@@ -267,6 +267,7 @@ class FifoResult:
     transfers: list[Transfer] = field(default_factory=list)
     unmatched: list[UnmatchedClose] = field(default_factory=list)
     books: dict = field(default_factory=dict)     # (cat, sym) -> [Lot]
+    books_at: dict = field(default_factory=dict)  # copy of books at the end of snapshot_at
     row_checks: list = field(default_factory=list)  # (trade, my_rpl)
     warnings: list[str] = field(default_factory=list)
 
@@ -312,7 +313,8 @@ def run_fifo(trades: list[Trade], splits: list[SplitEvent],
              suppress_fold_matches: bool = True,
              initial_lots: dict | None = None,
              data_start: datetime | None = None,
-             aud_adjustments: dict[int, float] | None = None) -> FifoResult:
+             aud_adjustments: dict[int, float] | None = None,
+             snapshot_at: date | None = None) -> FifoResult:
     """One chronological FIFO pass.
 
     fold_adjustments: trade index -> cash to add to that (share) trade's leg,
@@ -323,6 +325,9 @@ def run_fifo(trades: list[Trade], splits: list[SplitEvent],
     assigned with no opening lot at all, which was opened before then.
     aud_adjustments: trade index -> AUD to add to that trade's leg on top of
     the translation of its cash (premiums folded at their own date).
+    snapshot_at: also keep the books as at the end of that day in
+    res.books_at — every trade and split dated on or before it, nothing later
+    (res.books runs on to the end of the data).
     """
     res = FifoResult()
     books: dict = defaultdict(list)
@@ -332,10 +337,22 @@ def run_fifo(trades: list[Trade], splits: list[SplitEvent],
     fold_adjustments = fold_adjustments or {}
     aud_adjustments = aud_adjustments or {}
     split_i = 0
+    snapped = snapshot_at is None
+
+    def snapshot() -> None:
+        nonlocal split_i, snapped
+        while split_i < len(splits) and splits[split_i].dt.date() <= snapshot_at:
+            _apply_split(books, splits[split_i], res.warnings)
+            split_i += 1
+        # later trades consume lots in place: copy them
+        res.books_at = {k: [replace(lot) for lot in lots] for k, lots in books.items() if lots}
+        snapped = True
 
     for idx, t in enumerate(trades):
         if t.category not in CGT_CATEGORIES:
             continue
+        if not snapped and t.dt.date() > snapshot_at:
+            snapshot()
         while split_i < len(splits) and splits[split_i].dt <= t.dt:
             _apply_split(books, splits[split_i], res.warnings)
             split_i += 1
@@ -449,6 +466,8 @@ def run_fifo(trades: list[Trade], splits: list[SplitEvent],
         if "C" in t.codes and not fold_close and abs(unmatched_qty) < QTY_EPS:
             res.row_checks.append((t, my_rpl))
 
+    if not snapped:
+        snapshot()
     while split_i < len(splits):
         _apply_split(books, splits[split_i], res.warnings)
         split_i += 1
@@ -822,7 +841,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     # Orphan folds (no share leg) fall back to normal matches.
     res = run_fifo(trades, splits, fold_adjustments=fold_adj,
                    suppress_fold_matches=True, initial_lots=pre_lots, data_start=data_start,
-                   aud_adjustments=dict(aud_adj))
+                   aud_adjustments=dict(aud_adj), snapshot_at=fy_end)
     if orphan_transfers:
         # A fold with no share leg (cash-settled index option, or missing data)
         # reverts to a normal option close: proceeds are the closing trade's cash.
@@ -1119,8 +1138,12 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
                      if fy_start <= tr.dt.date() <= fy_end]
 
     # ---------------- carry-forward positions ----------------
+    # The parcels held at 30 June: what carries into next year. Data past 30
+    # June (uploaded to see what happened to options written in the year) must
+    # not move it. Data ending earlier: the parcels at its end, and the report
+    # already says it is provisional.
     carry_rows = []
-    for (cat, sym), lots in sorted(res.books.items()):
+    for (cat, sym), lots in sorted(res.books_at.items()):
         for lot in lots:
             if abs(lot.qty) < QTY_EPS:
                 continue

@@ -52,7 +52,8 @@ TABLES = {
     "carry_forward": (
         ["category", "symbol", "qty", "acquired", "cost_native", "currency", "fx",
          "cost_aud"],
-        "Open parcels carried forward — cost base locked at acquisition-date RBA rate"),
+        "Open parcels held at the end of the financial year (30 June), carried forward — "
+        "cost base locked at acquisition-date RBA rate"),
     "unmatched": (
         ["category", "symbol", "currency", "close_date", "qty", "close_cash",
          "ib_realized_pl", "gain_aud", "note"],
