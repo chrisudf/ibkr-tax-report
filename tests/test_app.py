@@ -119,3 +119,11 @@ def test_negative_carried_losses_rejected(client):
 def test_download_token_traversal_blocked(client):
     assert client.get("/api/download/../../etc/csv").status_code in (404, 308)
     assert client.get("/api/download/nonexistenttoken123/csv").status_code == 404
+
+
+def test_pdf_disclaimer_is_english_only(client):
+    d = _upload(client).get_json()
+    pdf = client.get(d["downloads"]["pdf"]).data
+    assert pdf.startswith(b"%PDF")
+    # the Chinese paragraph needed reportlab's STSong-Light CID font
+    assert b"STSong" not in pdf and b"UniGB" not in pdf

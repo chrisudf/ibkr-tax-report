@@ -2,7 +2,7 @@
 
 Landscape A4 working paper aimed at professional accountants: headline
 figures, full detail schedules, reconciliation against IBKR's own numbers,
-methodology with legislative references, and a bilingual disclaimer.
+methodology with legislative references, and a disclaimer.
 """
 from __future__ import annotations
 
@@ -13,15 +13,10 @@ from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.platypus import (BaseDocTemplate, Frame, PageBreak, PageTemplate,
                                 Paragraph, Spacer, Table, TableStyle)
 
 from .outputs import TABLES, OTHER_INCOME_TABLES, _OI_COLS
-
-_CJK_FONT = "STSong-Light"
-_CJK_OK = None
 
 INK = colors.HexColor("#1a2433")
 MUTED = colors.HexColor("#5b6878")
@@ -30,17 +25,6 @@ BAND = colors.HexColor("#eef2f7")
 ACCENT = colors.HexColor("#0f4c81")
 WARN_BG = colors.HexColor("#fdf3e3")
 WARN_BORDER = colors.HexColor("#d9a441")
-
-
-def _ensure_cjk() -> bool:
-    global _CJK_OK
-    if _CJK_OK is None:
-        try:
-            pdfmetrics.registerFont(UnicodeCIDFont(_CJK_FONT))
-            _CJK_OK = True
-        except Exception:
-            _CJK_OK = False
-    return _CJK_OK
 
 
 def _styles():
@@ -59,9 +43,6 @@ def _styles():
         "warn": ParagraphStyle("warn", fontSize=8.5, leading=11.5,
                                textColor=colors.HexColor("#7a5410"),
                                fontName="Helvetica", alignment=TA_LEFT),
-        "cjk": ParagraphStyle("cjk", fontSize=8.5, leading=12,
-                              fontName=_CJK_FONT if _ensure_cjk() else "Helvetica",
-                              textColor=MUTED),
     }
 
 
@@ -192,10 +173,6 @@ DISCLAIMER_EN = (
     "or revenue account, nor their residency or entity characterisation. Figures must be "
     "reviewed by a registered tax agent before lodgment. The producer of this document "
     "holds no AFSL and makes no recommendation about any financial product.")
-DISCLAIMER_ZH = (
-    "本文件是根据上列盈透证券(IBKR)对账单生成的记录与计算工作底稿，不构成税务、财务或法律建议；"
-    "亦不判定纳税人持有证券属资本账户或收入账户、税务居民身份或实体定性。所有数字须经注册税务师"
-    "复核后方可用于申报。本文件出具方不持有 AFSL，不对任何金融产品作出推荐。")
 
 
 def build_pdf(report: dict) -> bytes:
@@ -356,9 +333,6 @@ def build_pdf(report: dict) -> bytes:
     el.append(Spacer(1, 3 * mm))
     el.append(Paragraph("Disclaimer", styles["h2"]))
     el.append(Paragraph(DISCLAIMER_EN, styles["body"]))
-    el.append(Spacer(1, 1.5 * mm))
-    if _ensure_cjk():
-        el.append(Paragraph(DISCLAIMER_ZH, styles["cjk"]))
 
     doc.build(el)
     return buf.getvalue()
