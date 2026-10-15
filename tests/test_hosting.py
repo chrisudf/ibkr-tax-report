@@ -50,6 +50,7 @@ def test_index_local_mode(client):
     assert "v0.1.0" in html
     assert "https://github.com/chrisudf/ibkr-tax-report/issues" in html
     assert "Strict-Transport-Security" not in r.headers
+    assert not any("一" <= ch <= "鿿" for ch in html)   # English-only page
 
 
 def test_index_hosted_mode(client, hosted):
@@ -219,6 +220,61 @@ def test_results_dir_is_configurable(client, tmp_path, monkeypatch):
         "U9999999_FY2025-26_workpaper.csv"]
 
 
+def _upload_as(client, account):
+    files = [(io.BytesIO(t.replace("U9999999", account).encode()), n)
+             for t, n in ((fy25, "a.csv"), (fy26, "b.csv"))]
+    return client.post("/api/analyze", data={"files": files},
+                       content_type="multipart/form-data")
+
+
+@pytest.mark.parametrize("account", ["../escape", "..\\escape", "/etc/escape", "ABS"])
+def test_crafted_account_cannot_place_files_outside_the_run(client, tmp_path, account):
+    # report file names come from the statement's Account field
+    outside = tmp_path / "outside"
+    if account == "ABS":
+        account = str(outside / "x")          # an absolute path, harmless if it ever escaped
+    r = _upload_as(client, account)
+    assert r.status_code == 200, r.get_json()
+    d = r.get_json()
+    root = app_module.SETTINGS.results_dir
+    assert os.listdir(root) == [d["token"]]
+    names = os.listdir(os.path.join(root, d["token"]))
+    assert len(names) == 3 and all(n.replace("-", "").replace("_", "").replace(".", "").isalnum()
+                                   for n in names)
+    assert not outside.exists()
+    assert client.get(d["downloads"]["pdf"]).status_code == 200
+    client.delete(d["delete_url"])
+    assert os.listdir(root) == []             # deleting the run removes everything
+
+
+def test_file_stem():
+    assert app_module._file_stem("U9999999", "FY2025-26") == "U9999999_FY2025-26"
+    assert app_module._file_stem("../../x", "FY2025-26") == "x_FY2025-26"
+    assert app_module._file_stem("", "FY2025-26") == "account_FY2025-26"
+    assert len(app_module._file_stem("A" * 500, "FY2025-26")) == 80
+
+
+def test_run_deleted_mid_download_is_a_404(client, monkeypatch):
+    d = _demo(client).get_json()
+    real_expired = app_module._expired
+
+    def vanish(path, now):          # the sweeper wins the race right after the checks
+        expired = real_expired(path, now)
+        app_module.shutil.rmtree(path)
+        return expired
+    monkeypatch.setattr(app_module, "_expired", vanish)
+    assert client.get(d["downloads"]["pdf"]).status_code == 404
+
+
+def test_file_gone_when_opened_is_a_404(client, monkeypatch):
+    d = _demo(client).get_json()
+
+    def gone(*a, **k):
+        raise FileNotFoundError("deleted between listdir and open")
+    monkeypatch.setattr(app_module, "send_file", gone)
+    assert client.get(d["downloads"]["csv"]).status_code == 404
+
+
 def test_full_results_dir_gives_503_and_leaves_nothing(client, monkeypatch):
     def full(*a, **k):
         raise OSError(28, "No space left on device")
@@ -318,3 +374,33 @@ def test_rate_limiter_windows():
     assert rl.hit("a", lim, now=200) == 3400     # hourly budget spent; frees at t=3600
     assert rl.hit("b", lim, now=200) == 0
     assert rl.hit("a", [], now=200) == 0         # no limits configured
+
+
+def test_rate_limiter_forgets_addresses_after_the_longest_window():
+    rl = RateLimiter()
+    lim = [(2, 60), (3, 3600)]
+    rl.hit("203.0.113.5", lim, now=0)
+    rl.hit("198.51.100.7", lim, now=100)
+    rl.prune(lim, now=3599)
+    assert len(rl) == 2
+    rl.prune(lim, now=3600)
+    assert len(rl) == 1                          # gone exactly an hour after its last request
+    rl.prune(lim, now=3700)
+    assert len(rl) == 0
+
+
+def test_sweeper_prunes_addresses_without_further_requests(monkeypatch):
+    # the page promises the IP is kept at most an hour; that must not depend
+    # on someone else making a request later
+    monkeypatch.setattr(app_module.SETTINGS, "rate_limits", [(10, 60)])
+    app_module.limiter.hit("203.0.113.5", [(10, 60)], now=time.monotonic() - 61)
+    assert len(app_module.limiter) == 1
+
+    class Once:
+        n = 0
+
+        def wait(self, delay):
+            self.n += 1
+            return self.n > 1
+    app_module._sweep_loop(Once(), interval=30)
+    assert len(app_module.limiter) == 0

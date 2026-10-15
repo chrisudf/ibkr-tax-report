@@ -219,6 +219,15 @@ def sweep_results(now: float | None = None) -> int:
     return removed
 
 
+def _file_stem(account: str, fy: str) -> str:
+    """Report file names come from the statement's Account field, which is
+    whatever the uploaded CSV says. Reduce them to one plain file-name
+    component so a crafted value ("../x", "/etc/x") cannot place files
+    outside the run directory, where deletion and expiry would miss them."""
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{account or 'account'}_{fy}").strip("_")
+    return stem[:80] or "report"
+
+
 def _store_results(stem: str, workpaper: str, pdf: bytes, bundle: bytes) -> str:
     token = secrets.token_urlsafe(16)
     run_dir = os.path.join(_results_root(), token)
@@ -249,6 +258,7 @@ def _sweep_loop(stop: threading.Event, interval: float) -> None:
     while not stop.wait(interval):
         try:
             sweep_results()
+            limiter.prune(SETTINGS.rate_limits)
         except Exception:  # keep the sweeper alive whatever happens
             log.exception("result sweep failed")
 
@@ -310,11 +320,28 @@ class RateLimiter:
     def __init__(self):
         self._hits: dict[str, deque] = {}
         self._lock = threading.Lock()
-        self._last_prune = 0.0
 
     def reset(self) -> None:
         with self._lock:
             self._hits.clear()
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._hits)
+
+    def prune(self, limits: list[tuple[int, int]], now: float | None = None) -> None:
+        """Forget requests older than the longest window, and every address
+        left with none. The result sweeper calls this, so addresses go even
+        when no further requests arrive."""
+        now = time.monotonic() if now is None else now
+        horizon = now - max((w for _, w in limits), default=0)
+        with self._lock:
+            for key in list(self._hits):
+                q = self._hits[key]
+                while q and q[0] <= horizon:
+                    q.popleft()
+                if not q:
+                    del self._hits[key]
 
     def hit(self, key: str, limits: list[tuple[int, int]], now: float | None = None) -> int:
         """Record a request; 0 if allowed, else seconds until one would be."""
@@ -323,10 +350,6 @@ class RateLimiter:
         now = time.monotonic() if now is None else now
         longest = max(w for _, w in limits)
         with self._lock:
-            if now - self._last_prune > 600:
-                for k in [k for k, q in self._hits.items() if not q or q[-1] <= now - longest]:
-                    del self._hits[k]
-                self._last_prune = now
             q = self._hits.setdefault(key, deque())
             while q and q[0] <= now - longest:
                 q.popleft()
@@ -459,7 +482,7 @@ def _report_response(uploads: list[tuple[str, bytes]], form, demo: bool = False)
                              f"bug — please report it at {ISSUES_URL}, describing the "
                              "statement but without attaching it."), 500
 
-    stem = f"{report['meta']['account'] or 'account'}_{report['meta']['fy']}"
+    stem = _file_stem(report["meta"]["account"], report["meta"]["fy"])
     try:
         token = _store_results(stem, workpaper, pdf, bundle)
     except OSError:
@@ -532,10 +555,15 @@ def download(token: str, kind: str):
     if _expired(run_dir, time.time()):   # don't wait for the sweeper
         shutil.rmtree(run_dir, ignore_errors=True)
         abort(404)
-    for name in os.listdir(run_dir):
-        if name.endswith(_KIND_EXT[kind]):
-            return send_file(os.path.join(run_dir, name), mimetype=_KIND_MIME[kind],
-                             as_attachment=True, download_name=name, max_age=0)
+    # The sweeper or a DELETE can remove the run between the checks above and
+    # opening the file: that is a 404, not a 500 with the file name in the log.
+    try:
+        for name in os.listdir(run_dir):
+            if name.endswith(_KIND_EXT[kind]):
+                return send_file(os.path.join(run_dir, name), mimetype=_KIND_MIME[kind],
+                                 as_attachment=True, download_name=name, max_age=0)
+    except OSError:
+        pass
     abort(404)
 
 

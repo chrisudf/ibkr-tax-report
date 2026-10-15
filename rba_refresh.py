@@ -18,6 +18,7 @@ rates in memory; see IBKR_TAX_RBA_DIR in deploy/README.md.
 """
 from __future__ import annotations
 
+import math
 import os
 import sys
 import tempfile
@@ -60,6 +61,12 @@ def compare(current: RbaRates, candidate: RbaRates) -> str:
         new_first, new_last = candidate.coverage("USD")
     except Exception as e:
         raise Rejected(f"no USD series ({e})") from None
+    # every rate, including dates before the table in use: amounts are divided
+    # by the rate, so 0 divides by zero and inf silently converts to A$0
+    for ccy, table in candidate.rates.items():
+        for d, v in table.items():
+            if not (math.isfinite(v) and v > 0):
+                raise Rejected(f"invalid rate {v} for {ccy} on {d}")
     old_first, old_last = current.coverage("USD")
     if new_first > old_first:
         raise Rejected(f"starts {new_first}, later than the table in use ({old_first}); "
@@ -77,10 +84,6 @@ def compare(current: RbaRates, candidate: RbaRates) -> str:
             if old.get(d) != new.get(d):
                 raise Rejected(f"overlap differs: {ccy} on {d} is {old.get(d)} in the table "
                                f"in use, {new.get(d)} in the download")
-    for ccy, table in candidate.rates.items():
-        for d, v in table.items():
-            if d > old_last and not v > 0:
-                raise Rejected(f"non-positive rate {v} for {ccy} on {d}")
 
     return "updated" if new_last > old_last else "unchanged"
 
@@ -103,8 +106,9 @@ def refresh(current: RbaRates, dest: str, fetch_fn=fetch) -> Outcome:
         return Outcome("failed", f"download failed ({type(e).__name__}: {e})")
 
     dest_dir = os.path.dirname(os.path.abspath(dest))
-    fd, tmp = tempfile.mkstemp(prefix=".rba_f11.", suffix=".csv", dir=dest_dir)
+    tmp = None
     try:
+        fd, tmp = tempfile.mkstemp(prefix=".rba_f11.", suffix=".csv", dir=dest_dir)
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
         candidate = load_candidate(tmp)
@@ -118,10 +122,10 @@ def refresh(current: RbaRates, dest: str, fetch_fn=fetch) -> Outcome:
         return Outcome("unchanged", f"download ends {last}, same as the table in use")
     except Rejected as e:
         return Outcome("rejected", str(e))
-    except OSError as e:
+    except OSError as e:   # directory missing, unwritable or full
         return Outcome("failed", f"could not write {dest} ({e})")
     finally:
-        if os.path.exists(tmp):
+        if tmp and os.path.exists(tmp):
             os.unlink(tmp)
 
 

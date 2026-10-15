@@ -83,10 +83,23 @@ def test_missing_overlapping_row_is_rejected(tmp_path):
         rba_refresh.compare(old, new)
 
 
-def test_non_positive_new_rate_is_rejected(tmp_path):
+@pytest.mark.parametrize("bad", ["0", "-0.5", "inf", "1e999", "nan"])
+def test_invalid_new_rate_is_rejected(tmp_path, bad):
+    # inf would convert every amount to A$0 without an error
     old = rates(tmp_path, f11(10), "a")
-    new = rates(tmp_path, f11(12, overrides={date(2023, 1, 18): (0, 0.64)}), "b")
-    with pytest.raises(Rejected, match="non-positive"):
+    new = rates(tmp_path, f11(12, overrides={date(2023, 1, 18): (bad, 0.64)}), "b")
+    with pytest.raises(Rejected, match="invalid rate .* for USD on 2023-01-18"):
+        rba_refresh.compare(old, new)
+
+
+def test_invalid_rate_before_the_table_in_use_is_rejected(tmp_path):
+    # a download may start earlier than the table in use; those rows get used too
+    old = rates(tmp_path, f11(10), "a")
+    rows = f11(12).decode().split("\r\n")
+    rows.insert(5, "30-Dec-2022,0,60.0,0.64")       # before the first data row
+    new = rates(tmp_path, "\r\n".join(rows).encode(), "b")
+    assert new.coverage("USD")[0] == date(2022, 12, 30)
+    with pytest.raises(Rejected, match="invalid rate 0.0 for USD on 2022-12-30"):
         rba_refresh.compare(old, new)
 
 
@@ -142,6 +155,14 @@ def test_refresh_reports_network_failure(tmp_path):
     out = rba_refresh.refresh(RbaRates(), str(tmp_path / "x.csv"), offline)
     assert out.status == "failed" and "name resolution" in out.detail
     assert os.listdir(tmp_path) == []
+
+
+def test_refresh_reports_unwritable_destination(tmp_path):
+    # the temp file is created next to dest; a missing directory is a failure
+    # outcome (shown in /healthz), not an exception out of the refresh loop
+    out = rba_refresh.refresh(RbaRates(), str(tmp_path / "missing" / "rba_f11.csv"),
+                              lambda: f11(12))
+    assert out.status == "failed" and "could not write" in out.detail
 
 
 def test_refresh_unchanged_does_not_write(tmp_path):

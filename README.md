@@ -22,7 +22,6 @@ fictional account end to end without uploading anything.
 > residency, or anything else that turns on your circumstances, and it can be
 > wrong. Have a registered tax agent check the figures before you lodge.
 > Provided "as is", without warranty — see [LICENSE](LICENSE).
-> 本工具仅作记录与计算用途，不构成税务建议；数字须经注册税务代理复核后方可申报。
 
 ## Privacy
 
@@ -41,7 +40,8 @@ anywhere.
   **Delete my results now** removes it immediately.
 - **No file contents are logged.** There is no access log, no analytics, no
   tracking and no cookies. Your IP address is held in memory for up to an hour
-  for rate limiting (10 reports a minute, 60 an hour), and nowhere else.
+  after your last report, for rate limiting (10 reports a minute, 60 an hour),
+  and nowhere else.
 - Uploads are limited to **10 MB per report**. A year's Activity Statement CSV
   is usually 100–300 KB even for an active options trader, so the limit only
   catches the wrong kind of file.

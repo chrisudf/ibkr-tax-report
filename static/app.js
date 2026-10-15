@@ -163,11 +163,15 @@ function showRetention(data) {
 }
 
 $("delete-results").addEventListener("click", async () => {
-  if (!current) return;
+  // A new report can render while this request is in flight; the outcome
+  // then belongs to the old one and must not touch the page.
+  const target = current;
+  if (!target) return;
   const btn = $("delete-results");
   btn.disabled = true;
   try {
-    const resp = await fetch(current.deleteUrl, { method: "DELETE" });
+    const resp = await fetch(target.deleteUrl, { method: "DELETE" });
+    if (current !== target) return;
     if (resp.ok || resp.status === 404) {
       setDownloadsGone("Deleted: the report files are no longer on the server. What is on " +
         "this page stays only in your browser until you close or reload it.");
@@ -177,6 +181,7 @@ $("delete-results").addEventListener("click", async () => {
       throw new Error(data.error || `server error (${resp.status})`);
     }
   } catch (e) {
+    if (current !== target) return;
     btn.disabled = false;
     showError(`Could not delete the results: ${e.message}`);
   }
