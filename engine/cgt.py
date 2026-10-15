@@ -38,8 +38,8 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from dataclasses import dataclass, field, replace
+from datetime import date, datetime, time, timedelta
 
 from . import forex
 from .fx import RbaRates, FxError
@@ -195,6 +195,10 @@ class Lot:
     cash: float               # signed native-currency total for the open leg
     dt: datetime              # acquisition/grant datetime
     currency: str
+    # Held before the uploaded data starts (from IBKR's Mark-to-Market summary):
+    # quantity known; opening cash and date are not — the opening cash of the
+    # units each closing row takes comes from that row's IBKR Basis instead.
+    pre_data: bool = False
 
 
 @dataclass
@@ -212,6 +216,8 @@ class Match:
     aud_gain: float = 0.0
     open_fx: float = 0.0
     close_fx: float = 0.0
+    pre_data: bool = False    # opened before the uploaded data (open_cash from IBKR's Basis)
+    basis_unknown: bool = False
 
     @property
     def gain_native(self) -> float:
@@ -232,6 +238,7 @@ class Transfer:
     option_open_dt: datetime
     stock_trade_idx: int | None = None
     stock_symbol: str = ""
+    pre_data: bool = False    # option opened before the uploaded data (cash from IBKR's Basis)
 
 
 @dataclass
@@ -242,6 +249,9 @@ class UnmatchedClose:
     ib_rpl: float
     resolved: bool            # True when we could fall back to IBKR's Realized P/L
     aud_gain: float = 0.0
+    # Buying back (or expiry of) an option written before the data: its premium
+    # was a D2 gain of the year it was written, so only this close leg counts.
+    written: bool = False
 
 
 @dataclass
@@ -292,14 +302,22 @@ def _apply_split(books: dict, ev: SplitEvent, warnings: list[str]) -> None:
 
 def run_fifo(trades: list[Trade], splits: list[SplitEvent],
              fold_adjustments: dict[int, float] | None = None,
-             suppress_fold_matches: bool = True) -> FifoResult:
+             suppress_fold_matches: bool = True,
+             initial_lots: dict | None = None,
+             data_start: datetime | None = None) -> FifoResult:
     """One chronological FIFO pass.
 
     fold_adjustments: trade index -> cash to add to that (share) trade's leg,
     computed in a previous pass from assignment/exercise transfers.
+    initial_lots: (category, symbol) -> Lot held before the uploaded data
+    (copied, so each pass starts from the same books).
+    data_start: when the uploaded data starts — dates an option exercised or
+    assigned with no opening lot at all, which was opened before then.
     """
     res = FifoResult()
     books: dict = defaultdict(list)
+    for key, lot in (initial_lots or {}).items():
+        books[key].append(replace(lot))
     res.books = books
     fold_adjustments = fold_adjustments or {}
     split_i = 0
@@ -323,6 +341,11 @@ def run_fifo(trades: list[Trade], splits: list[SplitEvent],
         rem_cash = cash
         unmatched_qty = 0.0
         unmatched_cash = 0.0
+        pre_taken, in_data_open = [], 0.0
+        # nothing at all on the books: a closing trade can only have closed a
+        # position opened before the data (IBKR labels every fill of an order
+        # C;O, including one that only adds to the position the first opened)
+        nothing_held = not lots
 
         while abs(remaining) > QTY_EPS and lots and lots[0].qty * remaining < 0:
             lot = lots[0]
@@ -333,22 +356,44 @@ def run_fifo(trades: list[Trade], splits: list[SplitEvent],
             lot.cash -= open_alloc
             remaining += take if remaining < 0 else -take
             rem_cash -= close_alloc
-            lot_open_dt = lot.dt
+            lot_open_dt, lot_pre = lot.dt, lot.pre_data
             if abs(lot.qty) < QTY_EPS:
                 lots.pop(0)
             if fold_close and suppress_fold_matches:
-                res.transfers.append(Transfer(
+                taken = Transfer(
                     option_symbol=t.symbol, option_qty=take,
                     kind="assignment" if "A" in t.codes else "exercise",
                     dt=t.dt, cash=open_alloc, close_cash=close_alloc,
-                    currency=t.currency, option_open_dt=lot_open_dt))
+                    currency=t.currency, option_open_dt=lot_open_dt, pre_data=lot_pre)
+                res.transfers.append(taken)
             else:
-                res.matches.append(Match(
+                taken = Match(
                     category=t.category, symbol=t.symbol, currency=t.currency,
                     qty=take, open_dt=lot_open_dt, close_dt=t.dt,
                     open_cash=open_alloc, close_cash=close_alloc,
-                    short=q > 0, via_expiry="Ep" in t.codes))
+                    short=q > 0, via_expiry="Ep" in t.codes, pre_data=lot_pre)
+                res.matches.append(taken)
                 my_rpl += open_alloc + close_alloc
+            if lot_pre:
+                pre_taken.append((taken, take))
+            else:
+                in_data_open += open_alloc
+
+        if pre_taken:
+            # IBKR's Basis on a closing row is the opening cash of the units it
+            # closes (equal to the cent on every option close in real statements
+            # checked), so whatever the in-data lots do not account for belongs
+            # to the position held before the data.
+            pre_cash = t.ib_basis - in_data_open
+            total = sum(take for _, take in pre_taken)
+            for obj, take in pre_taken:
+                share = pre_cash * take / total
+                if isinstance(obj, Transfer):
+                    obj.cash = share
+                else:
+                    obj.open_cash = share
+                    obj.basis_unknown = not t.ib_basis
+                    my_rpl += share
 
         if abs(remaining) > QTY_EPS:
             if "C" in t.codes and "O" not in t.codes and not fold_close:
@@ -357,10 +402,31 @@ def run_fifo(trades: list[Trade], splits: list[SplitEvent],
                 unmatched_qty = remaining
                 unmatched_cash = rem_cash
                 rpl_alloc = t.ib_rpl * (abs(remaining) / abs(q)) if t.ib_rpl else 0.0
+                # Buying back an option is closing one that was written: its
+                # premium is not in this year (D2 at grant, s 104-40(2)).
+                written = is_option and remaining > 0
                 res.unmatched.append(UnmatchedClose(
                     trade=t, qty_unmatched=remaining, close_cash_alloc=rem_cash,
-                    ib_rpl=rpl_alloc, resolved=bool(t.ib_rpl)))
+                    ib_rpl=rpl_alloc, resolved=bool(t.ib_rpl) or written, written=written))
+            elif fold_close:
+                # Exercised or assigned, but opened before the data: no lot to
+                # close. Fold the option's opening cash from IBKR's Basis into the
+                # shares like any other assignment/exercise, rather than leave a
+                # phantom option position behind.
+                opened = (data_start or t.dt) - timedelta(seconds=1)
+                res.transfers.append(Transfer(
+                    option_symbol=t.symbol, option_qty=abs(remaining),
+                    kind="assignment" if "A" in t.codes else "exercise", dt=t.dt,
+                    cash=t.ib_basis * (abs(remaining) / abs(q)), close_cash=rem_cash,
+                    currency=t.currency, option_open_dt=opened, pre_data=True))
             else:
+                if "C" in t.codes and "O" in t.codes and nothing_held and t.ib_rpl:
+                    res.warnings.append(
+                        f"{t.symbol} on {t.dt.date()}: a trade that both closes and opens "
+                        "(code C;O) found no position to close in the uploaded data — the "
+                        "part it closed was opened before the data starts, so this year's "
+                        "figures for the contract are not reliable. Upload the statement that "
+                        "covers when the position was opened.")
                 books[(t.category, t.symbol)].append(
                     Lot(qty=remaining, cash=rem_cash, dt=t.dt, currency=t.currency))
 
@@ -485,6 +551,11 @@ def _normalize_symbol_renames(stmt: Statement, splits: list[SplitEvent]) -> list
         for p in stmt.open_positions:
             if p.symbol in rename:
                 p.symbol = rename[p.symbol]
+        for snap in stmt.position_snapshots:
+            renamed: dict = defaultdict(float)
+            for (cat, sym), qty in snap.qty.items():
+                renamed[(cat, rename.get(sym, sym))] += qty
+            snap.qty = dict(renamed)
         for ev in splits:
             if ev.category == "Stocks":
                 ev.old_symbol = rename.get(ev.old_symbol, ev.old_symbol)
@@ -507,6 +578,39 @@ def _normalize_symbol_renames(stmt: Statement, splits: list[SplitEvent]) -> list
             else:
                 notes.append(f"symbol change unified via conid: {old} -> {new}")
     return notes
+
+
+def _pre_data_lots(stmt: Statement) -> dict:
+    """Positions already held when the uploaded data starts.
+
+    The earliest statement's Mark-to-Market Performance Summary gives each
+    position's quantity at the start of its period ("Prior Quantity"); trades in
+    the data before then (an earlier file without that summary) are taken off.
+    What is left was opened before any of the data: one lot per position, with
+    the quantity known but not the opening cash or date. FIFO closes these first
+    (they are the oldest), and each closing row's IBKR Basis supplies the opening
+    cash of the units it takes. Without these lots, a sale of shares held before
+    the data would silently consume this year's purchases instead."""
+    snaps = [p for p in stmt.position_snapshots if p.as_of]
+    if not snaps:
+        return {}
+    first = min(snaps, key=lambda p: p.as_of)
+    snap_start = datetime.combine(first.as_of, time())
+    start = datetime.combine(min(first.as_of, stmt.period_start or first.as_of), time())
+    lots = {}
+    for (cat, sym), qty in sorted(first.qty.items()):
+        if cat not in CGT_CATEGORIES:
+            continue
+        same = [t for t in stmt.trades if (t.category, t.symbol) == (cat, sym)]
+        qty -= sum(t.qty for t in same if t.dt < snap_start)
+        if abs(qty) < QTY_EPS:
+            continue
+        ccy = (same[0].currency if same else None) or next(
+            (p.currency for p in stmt.open_positions if (p.category, p.symbol) == (cat, sym)),
+            None) or stmt.base_currency or "USD"
+        lots[(cat, sym)] = Lot(qty=qty, cash=0.0, dt=start - timedelta(seconds=1),
+                               currency=ccy, pre_data=True)
+    return lots
 
 
 def _d2_outcome_warning(unresolved: list, data_end: date | None, fy_end: date) -> str:
@@ -675,8 +779,12 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     warnings.extend(ca_warnings)
 
     trades = stmt.trades
+    pre_lots = _pre_data_lots(stmt)
+    data_start_d = stmt.period_start
+    data_start = datetime.combine(data_start_d, time()) if data_start_d else None
+    before_data = f"before {data_start_d}" if data_start_d else "before the uploaded data"
     # Pass 1: discover assignment/exercise transfers.
-    pass1 = run_fifo(trades, splits)
+    pass1 = run_fifo(trades, splits, initial_lots=pre_lots, data_start=data_start)
     fold_adj = _attach_transfers(trades, pass1.transfers)
     orphan_transfers = [tr for tr in pass1.transfers if tr.stock_trade_idx is None]
     for tr in orphan_transfers:
@@ -686,7 +794,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     # Pass 2: definitive run with share-leg cash adjusted by folded premiums.
     # Orphan folds (no share leg) fall back to normal matches.
     res = run_fifo(trades, splits, fold_adjustments=fold_adj,
-                   suppress_fold_matches=True)
+                   suppress_fold_matches=True, initial_lots=pre_lots, data_start=data_start)
     if orphan_transfers:
         # A fold with no share leg (cash-settled index option, or missing data)
         # reverts to a normal option close: proceeds are the closing trade's cash.
@@ -698,7 +806,8 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
                     category="Equity and Index Options", symbol=tr.option_symbol,
                     currency=tr.currency, qty=tr.option_qty,
                     open_dt=tr.option_open_dt, close_dt=tr.dt,
-                    open_cash=tr.cash, close_cash=tr.close_cash, short=tr.cash > 0))
+                    open_cash=tr.cash, close_cash=tr.close_cash, short=tr.cash > 0,
+                    pre_data=tr.pre_data))
             else:
                 res_transfers.append(tr)
         res.transfers = res_transfers
@@ -709,12 +818,51 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     closed_rows = []
     tot = dict(gains_disc=0.0, gains_nondisc=0.0, losses=0.0, net=0.0)
     prior_written_notes = []
+    pre_closed, pre_unresolved, pre_maybe_this_fy = [], [], []
     for m in res.matches:
         close_d = m.close_dt.date()
         if not (fy_start <= close_d <= fy_end):
             continue
         is_option = m.category == "Equity and Index Options"
         open_d = m.open_dt.date()
+        if m.pre_data:
+            # Opened before the uploaded data: the opening cash is IBKR's Basis
+            # for these units, the date is not in the files.
+            if m.basis_unknown and not (m.short and is_option):
+                pre_unresolved.append(f"{m.symbol} ({close_d})")
+                continue
+            aud_close, m.close_fx = fx.to_aud(m.close_cash, m.currency, close_d)
+            if m.short and is_option:
+                # Written before the data: its premium was a D2 gain of the year it
+                # was written (s 104-40(2)). Only the close leg belongs to this year.
+                g = aud_close
+                note = (f"written {before_data} (premium {m.currency} {m.open_cash:,.2f} "
+                        "per IBKR's basis) — its D2 gain belongs to the year it was "
+                        "written; only the close leg is recognised this year")
+                if data_start_d and data_start_d > fy_start:
+                    pre_maybe_this_fy.append(f"{m.symbol} ({m.currency} {m.open_cash:,.2f})")
+            else:
+                aud_open, m.open_fx = fx.to_aud(m.open_cash, m.currency, close_d)
+                g = aud_open + aud_close
+                note = (f"acquired {before_data}: cost per IBKR's basis, translated at the "
+                        "close-date rate (acquisition date not in the files); no discount "
+                        "claimed")
+            m.aud_gain = g
+            pre_closed.append(m.symbol)
+            if g >= 0:
+                tot["gains_nondisc"] += g
+            else:
+                tot["losses"] += g
+            tot["net"] += g
+            closed_rows.append(dict(
+                category=m.category, symbol=m.symbol, currency=m.currency,
+                qty=round(m.qty, 4), open_date=before_data, close_date=str(close_d),
+                days_held="", open_cash=round(m.open_cash, 2),
+                close_cash=round(m.close_cash, 2), open_fx=m.open_fx, close_fx=m.close_fx,
+                gain_native=round(m.gain_native, 2), gain_aud=round(g, 2),
+                short="Y" if m.short else "", expiry="Y" if m.via_expiry else "",
+                discount_eligible="", note=note))
+            continue
         if m.short and is_option and fy_of(open_d) < opts.fy_end_year:
             # Written option granted in a prior FY: premium was a D2 gain in
             # that year. This year only the buy-back cost is a capital loss.
@@ -753,7 +901,15 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     for u in res.unmatched:
         close_d = u.trade.dt.date()
         in_fy = fy_start <= close_d <= fy_end
-        if u.resolved and in_fy:
+        if u.written and in_fy:
+            # IBKR's Realized P/L would add the premium back in — it was already
+            # a D2 gain of the year the option was written.
+            aud_g, fxr = fx.to_aud(u.close_cash_alloc, u.trade.currency, close_d)
+            u.aud_gain = aud_g
+            unmatched_total_aud += aud_g
+            if data_start_d and data_start_d > fy_start:
+                pre_maybe_this_fy.append(u.trade.symbol)
+        elif u.resolved and in_fy:
             aud_g, fxr = fx.to_aud(u.ib_rpl, u.trade.currency, close_d)
             u.aud_gain = aud_g
             unmatched_total_aud += aud_g
@@ -768,7 +924,9 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
             close_cash=round(u.close_cash_alloc, 2),
             ib_realized_pl=round(u.ib_rpl, 2) if u.resolved else "",
             gain_aud=round(aud_g, 2) if u.resolved else "UNRESOLVED",
-            note="acquired before uploaded data; IBKR Realized P/L used at close-date FX; "
+            note="written before uploaded data; its premium was a D2 gain of the year it "
+                 "was written, so only the close leg is counted" if u.written else
+                 "acquired before uploaded data; IBKR Realized P/L used at close-date FX; "
                  "no discount claimed" if u.resolved else
                  "acquired before uploaded data and no IBKR Realized P/L available"))
     if unmatched_rows:
@@ -800,6 +958,13 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
             if lot.qty >= -QTY_EPS:
                 continue
             open_d = lot.dt.date()
+            if lot.pre_data:
+                prior_written_notes.append(
+                    f"{sym}: written {before_data} and still open at {fy_end} — its D2 gain "
+                    "belongs to the year it was written")
+                if data_start_d and data_start_d > fy_start:
+                    pre_maybe_this_fy.append(sym)
+                continue
             if not (fy_start <= open_d <= fy_end):
                 if open_d < fy_start:
                     prior_written_notes.append(
@@ -838,6 +1003,8 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     # from the D2 list silently disagrees with the year-end position snapshot.
     d2_later_assigned = []
     for tr in res.transfers:
+        if tr.pre_data:
+            continue
         od, td = tr.option_open_dt.date(), tr.dt.date()
         if fy_start <= od <= fy_end and td > fy_end:
             prem_aud, _ = fx.to_aud(tr.cash, tr.currency, od)
@@ -852,9 +1019,44 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
         # First in the list: it is the one gap that changes the headline figure.
         warnings.insert(0, _d2_outcome_warning(d2_unresolved, stmt.period_end, fy_end))
 
+    if pre_lots:
+        held = [f"{sym} {lot.qty:g}" for (cat, sym), lot in sorted(pre_lots.items())]
+        more = f" and {len(held) - 12} more" if len(held) > 12 else ""
+        warnings.append(
+            f"{len(held)} position(s) were already open when the uploaded data starts "
+            f"({data_start_d}), per IBKR's Mark-to-Market summary: {', '.join(held[:12])}"
+            f"{more}. FIFO closes them first, taking their opening cash from IBKR's cost "
+            "basis on each closing trade. Shares and bought options among them are "
+            "translated at the close-date rate with no CGT discount; options written among "
+            "them are treated as written in an earlier year, so only their close leg counts. "
+            "Upload the statements covering when they were opened for exact figures.")
+    if pre_unresolved:
+        warnings.append(
+            f"{len(pre_unresolved)} closing trade(s) of positions held before the uploaded data "
+            "carry no IBKR cost basis and are EXCLUDED from totals — resolve manually: "
+            + ", ".join(pre_unresolved))
+    if pre_maybe_this_fy:
+        warnings.append(
+            f"The uploaded data starts {data_start_d}, after {fy_start}. These options were "
+            f"written before the data starts, possibly after {fy_start}; if so, their premiums "
+            f"are D2 gains of {fy_label(opts.fy_end_year)} that these figures leave out: "
+            + ", ".join(sorted(set(pre_maybe_this_fy)))
+            + f". Upload a statement starting on or before {fy_start}.")
+
     # Transfers that cancel a prior-year D2 -> amendment flags
     amendment_flags = []
     for tr in res.transfers:
+        if tr.pre_data:
+            if tr.kind == "assignment" and tr.cash > 0 and fy_start <= tr.dt.date() <= fy_end:
+                amendment_flags.append(
+                    f"{tr.option_symbol}: written {before_data}, assigned on {tr.dt.date()} — "
+                    f"if its premium ({tr.currency} {tr.cash:,.2f} per IBKR's basis) was "
+                    "returned as a D2 gain for the year it was written, that gain is now "
+                    "disregarded (s 104-40(5)); amend that return, translating the premium at "
+                    "the rate on the day it was written. Premium folded into the share parcel "
+                    f"{tr.stock_symbol or '(unmatched)'}. Upload that year's statement to have "
+                    "the amount worked out.")
+            continue
         od = tr.option_open_dt.date()
         if fy_of(od) < fy_of(tr.dt.date()) and fy_of(tr.dt.date()) == opts.fy_end_year:
             prem_aud, _ = fx.to_aud(tr.cash, tr.currency, od)
@@ -867,7 +1069,8 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
 
     # ---------------- transfers (this-FY assignment/exercise folds) --------
     transfer_rows = [dict(option=tr.option_symbol, kind=tr.kind, date=str(tr.dt.date()),
-                          option_written=str(tr.option_open_dt.date()),
+                          option_written=before_data if tr.pre_data
+                          else str(tr.option_open_dt.date()),
                           qty=round(tr.option_qty, 4),
                           premium_native=round(tr.cash, 2), currency=tr.currency,
                           folded_into=tr.stock_symbol or "(unmatched)")
@@ -879,6 +1082,13 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     for (cat, sym), lots in sorted(res.books.items()):
         for lot in lots:
             if abs(lot.qty) < QTY_EPS:
+                continue
+            if lot.pre_data:
+                carry_rows.append(dict(category=cat, symbol=sym, qty=round(lot.qty, 4),
+                                       acquired=f"{before_data} (cost not in the uploaded "
+                                                "files)",
+                                       cost_native="", currency=lot.currency, fx="",
+                                       cost_aud=""))
                 continue
             cost_native = -lot.cash
             cost_aud, fxr = fx.to_aud(cost_native, lot.currency, lot.dt.date())
@@ -919,6 +1129,11 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
             explained = ""
             if abs(mq - sq) <= 1e-4 and abs((mc - sc) + fold_by_under.get(sym, 0.0)) <= 1.0:
                 explained = "difference equals option premium folded into cost base (s 134-1) — expected"
+                pos_ok += 1
+            if not explained and abs(mq - sq) <= 1e-4 and any(
+                    k[1] == sym for k, lots in res.books.items() for lot in lots if lot.pre_data):
+                explained = ("held before the uploaded data: quantity agrees, the cost of that "
+                             "part is not in the files")
                 pos_ok += 1
             if not explained and abs(mq - sq) <= 1e-4:
                 explained = ("cost-only difference — often a return of capital or other "

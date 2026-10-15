@@ -98,11 +98,21 @@ withholding tax, interest, fees, deposits and withdrawals.
 Every realisation is listed in the report's Div 775 schedule (CSV, PDF and
 ZIP), with the AUD value, the FIFO cost and the dates the units were acquired.
 
-If you still hold parcels bought before the reported year, also upload the
-earlier years' activity statements: they supply the FIFO history (the
-acquisition date and cost of each parcel). Overlapping periods are
-de-duplicated row by row. One IBKR account per run — files from different
-accounts are refused.
+If you still hold parcels bought before the reported year, or had written
+options still open at the start of it, also upload the earlier years'
+activity statements: they supply the FIFO history (the acquisition date and
+cost of each parcel, the write date and premium of each option). Overlapping
+periods are de-duplicated row by row. One IBKR account per run — files from
+different accounts are refused.
+
+Without that history the tool still knows what was open when the data starts,
+from the statement's Mark-to-Market Performance Summary, and closes those
+positions first. Their opening cash comes from IBKR's cost basis on each
+closing trade, but their dates do not. So shares and bought options are
+translated at the sale-date rate with no CGT discount. Written options are
+treated as written in an earlier year (only the buy-back counts, an expiry
+counts nothing). An assignment is flagged for amending the year the option was
+written, without an amount. The report warns, listing the positions.
 
 Every date in every file must fall inside the bundled RBA rate table, or the
 run stops — see [RBA exchange rates](#rba-exchange-rates-datarba_f11csv).

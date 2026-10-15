@@ -93,6 +93,16 @@ class CashReport:
 
 
 @dataclass
+class PositionSnapshot:
+    """Positions held when one statement's period starts ("Prior Quantity" in
+    its Mark-to-Market Performance Summary), keyed by (asset category, symbol).
+    The earliest one tells the engine what was already held before the data."""
+    source_name: str
+    as_of: date | None
+    qty: dict[tuple[str, str], float]
+
+
+@dataclass
 class Statement:
     source_name: str
     title: str = ""
@@ -114,6 +124,7 @@ class Statement:
     forex_pl: list[CashItem] = field(default_factory=list)   # IBKR's FX P/L, in base currency
     deposits: list[CashItem] = field(default_factory=list)   # deposits (+) / withdrawals (-)
     cash_reports: list[CashReport] = field(default_factory=list)
+    position_snapshots: list[PositionSnapshot] = field(default_factory=list)
     conid_symbols: dict[str, list[str]] = field(default_factory=dict)  # conid -> symbols seen
     conid_current: dict[str, str] = field(default_factory=dict)        # conid -> current symbol
     code_legend: dict[str, str] = field(default_factory=dict)
@@ -265,6 +276,7 @@ def _parse_rows(reader, source_name: str) -> Statement:
     sections: dict[str, _Section] = {}
     saw_statement_section = False
     cash_balances: dict[str, dict[str, float]] = {"Starting Cash": {}, "Ending Cash": {}}
+    saw_mtm, prior_qty = False, {}
 
     for row in reader:
         if len(row) < 2:
@@ -388,6 +400,18 @@ def _parse_rows(reader, source_name: str) -> Statement:
                     cur != "Base Currency Summary":
                 cash_balances[label][cur] = _num(sec.get(row, "Total"))
 
+        elif sec_name == "Mark-to-Market Performance Summary":
+            saw_mtm = True
+            cat, sym = sec.get(row, "Asset Category"), sec.get(row, "Symbol").strip()
+            if cat in ("", "Total") or not sym or sym.startswith("Total"):
+                continue
+            try:
+                prior = _num(sec.get(row, "Prior Quantity"))
+            except (ValueError, ParseError):
+                continue   # "--" on summary lines
+            if prior:
+                prior_qty[(cat, occ_to_display(sym))] = prior
+
         elif sec_name == "Borrow Fee Details":
             cur = sec.get(row, "Currency")
             ds = sec.get(row, "Value Date").strip()
@@ -447,6 +471,9 @@ def _parse_rows(reader, source_name: str) -> Statement:
         stmt.cash_reports.append(CashReport(
             source_name, stmt.period_start, stmt.period_end,
             dict(cash_balances["Starting Cash"]), dict(cash_balances["Ending Cash"]), stmt))
+    if saw_mtm:
+        stmt.position_snapshots.append(PositionSnapshot(source_name, stmt.period_start,
+                                                        prior_qty))
     stmt.trades.sort(key=lambda t: t.dt)  # csv.reader preserves file order for ties
     return stmt
 
@@ -512,6 +539,7 @@ def merge_statements(stmts: list[Statement]) -> Statement:
         setattr(out, attr, sorted(dedupe(ci_key, [getattr(s, attr) for s in stmts]),
                                   key=lambda x: x.d))
     out.cash_reports = [r for s in stmts for r in s.cash_reports]   # stmts sorted by period
+    out.position_snapshots = [p for s in stmts for p in s.position_snapshots]
 
     # Overlap sanity note
     periods = [(s.period_start, s.period_end, s.source_name) for s in stmts

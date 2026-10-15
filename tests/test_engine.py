@@ -515,6 +515,101 @@ def test_unmatched_close_without_rpl_is_excluded():
     assert any("EXCLUDED" in w for w in rep["warnings"])
 
 
+# Options opened before the uploaded data — e.g. FY2026-27 run with only that
+# year's statement while puts written in FY2025-26 were still open at 30 June.
+# IBKR's Realized P/L on their closing rows includes the premium, which was a
+# D2 gain of the year they were written (s 104-40(2)).
+
+def test_buyback_of_option_written_before_the_data_counts_the_close_leg_only():
+    rep = run([trade(OPT, "ABC 19DEC25 50 P", "2025-09-15, 10:00:00", 1, -200, -1,
+                     basis="499", rpl="298", code="C")])
+    # -201 / 0.6661 (15 Sep 2025); IBKR's +298 would have counted the premium again
+    assert rep["summary"]["closed_net"] == pytest.approx(-301.76, abs=0.01)
+    assert "only the close leg" in rep["unmatched"][0]["note"]
+
+
+def test_expiry_of_option_written_before_the_data_counts_nothing():
+    rep = run([trade(OPT, "DEF 18JUL25 40 P", "2025-07-19, 16:20:00", 1, 0, 0,
+                     basis="300", rpl="300", code="C;Ep")])
+    assert rep["summary"]["closed_net"] == 0.0               # was +A$461.40
+
+
+def test_assignment_of_put_written_before_the_data_folds_premium_and_flags_amendment():
+    rep = run([trade(OPT, "XYZ 18JUL25 50 P", "2025-07-19, 16:20:00", 1, 0, 0,
+                     basis="299", rpl="0", code="A;C"),
+               trade("Stocks", "XYZ", "2025-07-19, 16:20:00", 100, -5000, 0, code="A;O")])
+    assert [(c["symbol"], c["cost_native"]) for c in rep["carry_forward"]] == [("XYZ", 4701.0)]
+    (flag,) = rep["amendment_flags"]
+    assert "written before 2025-07-01" in flag and "USD 299.00" in flag
+    assert "s 104-40(5)" in flag
+    assert rep["transfers"][0]["option_written"] == "before 2025-07-01"
+
+
+def test_exercise_of_call_bought_before_the_data_folds_its_cost():
+    rep = run([trade(OPT, "LLL 16JAN26 100 C", "2026-01-17, 16:20:00", -1, 0, 0,
+                     basis="-1501", rpl="0", code="C;Ex"),
+               trade("Stocks", "LLL", "2026-01-17, 16:20:00", 100, -10000, 0, code="Ex;O")])
+    assert [(c["symbol"], c["cost_native"]) for c in rep["carry_forward"]] == [("LLL", 11501.0)]
+    assert rep["d2_open"] == [] and rep["amendment_flags"] == []
+    assert not any(w.startswith("D2 OUTCOME") for w in rep["warnings"])
+
+
+ROLL = [trade(OPT, "LIT 17JUL25 30 P", "2025-07-02, 10:00:00", 1, -150, -1,
+              basis="200", rpl="49", code="C"),
+        trade(OPT, "LIT 17JUL25 30 P", "2025-07-02, 10:01:00", 2, -300, -1.3,
+              basis="200", rpl="49.35", code="C;O"),
+        trade(OPT, "LIT 17JUL25 30 P", "2025-07-02, 10:02:00", -1, 160, -1,
+              basis="-150.65", rpl="8.35", code="C")]
+
+
+def test_position_held_before_the_data_comes_from_the_mark_to_market_summary():
+    """-2 written before the data; bought back 1, then 2 in one C;O trade (closes
+    1, opens 1 long), then the long sold. Same result as with the history."""
+    with_history = run(
+        [trade(OPT, "LIT 17JUL25 30 P", "2025-06-10, 10:00:00", -2, 401.3, -1.3, code="O"),
+         *ROLL], period="July 1, 2024 - June 30, 2026")
+    rep = run(ROLL, prior_positions=[(OPT, "LIT 17JUL25 30 P", -2)])
+    assert rep["summary"]["closed_net"] == pytest.approx(
+        with_history["summary"]["closed_net"], abs=0.01)
+    assert rep["carry_forward"] == []                        # no phantom long
+    assert any("already open when the uploaded data starts" in w and "LIT 17JUL25 30 P -2" in w
+               for w in rep["warnings"])
+    # without the summary the C;O split cannot be known: said, not guessed silently
+    bare = run(ROLL)
+    assert any("(code C;O) found no position to close" in w for w in bare["warnings"])
+
+
+def test_shares_held_before_the_data_are_sold_first():
+    """FIFO must not match a sale against this year's purchase when an older
+    holding, invisible in the trades, was there first."""
+    rep = run([trade("Stocks", "XYZ", "2025-08-01, 10:00:00", 100, -5000, -1, code="O"),
+               trade("Stocks", "XYZ", "2026-02-02, 10:00:00", -100, 5500, -1,
+                     basis="-4000", rpl="1499", code="C")],
+              prior_positions=[("Stocks", "XYZ", 100)])
+    (lot,) = rep["closed_lots"]
+    assert lot["open_date"] == "before 2025-07-01" and lot["discount_eligible"] == ""
+    # IBKR's basis 4,000 for the old shares; both legs at 0.6942 (2 Feb 2026)
+    assert lot["gain_aud"] == pytest.approx(1499 / 0.6942, abs=0.01)
+    assert [(c["symbol"], c["acquired"], c["cost_native"]) for c in rep["carry_forward"]] == \
+        [("XYZ", "2025-08-01", 5001.0)]
+
+
+def test_held_all_year_before_the_data_is_carried_forward_without_a_cost():
+    rep = run([], prior_positions=[("Stocks", "HOLD", 50)],
+              open_positions=[opos("Stocks", "HOLD", 50, 2500)])
+    (row,) = rep["carry_forward"]
+    assert row["qty"] == 50 and row["cost_native"] == "" and "not in the uploaded" in row["acquired"]
+    assert rep["reconciliation"]["position_diffs"][0]["note"].startswith("held before the")
+
+
+def test_data_starting_after_1_july_warns_that_a_premium_may_be_missing():
+    rep = run([trade(OPT, "ABC 19DEC25 50 P", "2025-12-01, 10:00:00", 1, -200, -1,
+                     basis="499", rpl="298", code="C")],
+              period="November 11, 2025 - June 30, 2026")
+    assert any("possibly after 2025-07-01" in w and "ABC 19DEC25 50 P" in w
+               for w in rep["warnings"])
+
+
 # ---------------------------------------------------------------- entities & losses
 
 ENTITY_CASE = [
