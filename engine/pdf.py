@@ -145,8 +145,10 @@ METHOD_POINTS = [
     ("Dates", "Dates are those of IBKR's CSV, in Sydney time (AEST/AEDT): most US trades "
      "carry the next calendar day. IBKR's statement day ends at 10:00 Sydney, so a statement "
      "ending 30 June can hold rows dated 1 July; they are counted in the year of their date "
-     "and listed in a warning. The ATO gives no rule on which time zone to use; the same "
-     "convention should be kept from year to year."),
+     "and listed in a warning. The ATO gives no rule on which time zone to use. The Acts "
+     "Interpretation Act 1901 s 37 points to the legal time of the taxpayer's State, which "
+     "differs from Sydney time in Queensland, WA, SA and the NT. Whichever convention is "
+     "used, keep it for the whole return and from year to year."),
     ("Lot matching", "First-in-first-out per symbol, matching IBKR's default. Realised "
      "gain per parcel = opening cashflow + closing cashflow (both signed, inclusive of "
      "commissions), valid for long and short parcels."),
@@ -155,7 +157,8 @@ METHOD_POINTS = [
      "never applies to D2 gains (s 115-25(3)). Buying one back is a capital loss equal "
      "to the buy-back cost — the prevailing view, on which the ATO has published no "
      "ruling (a private ruling gives certainty). A deferred/closed-basis alternative, "
-     "taxing each option in the year it is closed, is shown for comparison only."),
+     "taxing each option in the year it is closed, is shown for comparison only (an "
+     "option written before the uploaded data takes its premium at the close-date rate)."),
     ("Assignment / exercise", "The D2 gain is disregarded when a written option is "
      "exercised or assigned (s 104-40(5)); the premium is instead folded into the share "
      "parcel — reducing cost base of shares acquired under a put (s 134-1) or increasing "
@@ -167,9 +170,10 @@ METHOD_POINTS = [
      "(CGT event C2, s 104-25)."),
     ("Discount", "Applied only to long parcels acquired at least 12 months before the "
      "CGT event (s 115-25(1)) at the entity's statutory rate, after applying losses "
-     "against non-discountable gains first. Neither the acquisition day nor the event "
-     "day counts (Acts Interpretation Act 1901 s 2G): bought 28 February 2023, the "
-     "first discountable day is 1 March 2024."),
+     "against non-discountable gains first. Leaving out the acquisition day and the event "
+     "day (the ATO's approach), the 12 months are counted as months under the Acts "
+     "Interpretation Act 1901 s 2G: bought 28 February 2023, the first discountable day "
+     "is 1 March 2024."),
     ("Gains and losses", "Each CGT event is counted on its own in total gains and "
      "losses: an option written and bought back in the same year is a D2 gain (the "
      "premium) and a separate capital loss (the buy-back), as when the two fall in "
@@ -255,9 +259,10 @@ def build_pdf(report: dict) -> bytes:
         ("Current-year gains subtotal — strict ATO view", s["strict_subtotal"]),
         ("Prior-year losses carried in", s["carried_losses_input"]),
         ("Losses applied (non-discountable gains first)", s["losses_applied_total"]),
-        ("    of which current-year losses — CGT schedule item 2, label B",
+        ("    of which " + lb.get("losses_current", "current-year losses"),
          s["current_year_losses_applied"]),
-        ("    of which prior-year net losses — item 2, label C", s["carried_losses_applied"]),
+        ("    of which " + lb.get("losses_prior", "prior-year net losses"),
+         s["carried_losses_applied"]),
         (f"CGT discount applied ({_rate_label(s['discount_rate'])} of remaining eligible gains)",
          s["discount_applied"]),
         (gains_label, s["total_capital_gains_18H"]),
@@ -277,10 +282,12 @@ def build_pdf(report: dict) -> bytes:
     el.append(Paragraph("Other amounts (AUD)", styles["h2"]))
     el.append(_kv_table([
         ("Dividends, gross (foreign income)", oi["dividends_aud"]),
-        ("Foreign withholding tax (FITO candidate)", oi["withholding_tax_aud"]),
-        *([("    of which above the 15% US treaty rate — reclaim from the IRS, not FITO",
-            oi["withholding_above_treaty_aud"])] if oi.get("withholding_above_treaty_aud")
-          else []),
+        *([("Foreign tax withheld", oi["withholding_tax_aud"]),
+            ("    of which above the 15% US treaty rate — reclaim from the IRS, not FITO",
+             -oi["withholding_above_treaty_aud"]),
+            ("Foreign tax withheld less that excess (FITO candidate)",
+             oi["fito_candidate_aud"])] if oi.get("withholding_above_treaty_aud")
+          else [("Foreign tax withheld (FITO candidate)", oi["withholding_tax_aud"])]),
         *([("Australian tax withheld in AUD (not FITO)", oi["australian_withholding_aud"])]
           if oi.get("australian_withholding_aud") else []),
         ("Interest, net (IBKR nets borrow fees into this figure)", oi["interest_aud"]),

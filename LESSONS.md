@@ -3,6 +3,36 @@
 Problems met while building and running this tool, what caused them, and what
 we do now. Newest first.
 
+## 2026-10-16 — the rest of the tax-logic audit
+
+- **IBKR's day is not the calendar day.** It files rows by their US report
+  date and its statement day ends the next morning in Sydney, so a statement
+  carries trades dated the day after it ends, and the next statement's opening
+  positions already include them. Cutting files at Sydney midnight raised
+  false "positions do not add up" warnings and, with an export lacking the
+  Mark-to-Market summary, invented a parcel. Decide which side of a boundary a
+  row is on by the file it came from, not by its date.
+- **A placeholder date is not a date.** Positions held before the data get a
+  stand-in opening time just before the data starts. One loop took it for a
+  write date inside the year and counted a premium as this year's D2 gain. Any
+  code that compares dates has to skip, or say it is skipping, rows whose date
+  is unknown.
+- **Do not look up what this year does not need.** A run for one year failed on
+  a rate past the end of the RBA table for a trade months after 30 June, used
+  only for a correction this year never reads. Stricter input rules (here, no
+  extrapolated rates) turn such lookups into hard failures.
+- **One figure, one meaning.** A row labelled FITO held the full withholding,
+  including the part the warning below it said was not FITO. If a figure needs
+  a qualification, give the qualified figure its own row.
+- **Cite the provision that says it.** s 134-1(1) item 1 is the call; a put is
+  item 2. s 112-155 is individuals; trusts are s 112-165. s 2G of the Acts
+  Interpretation Act defines a month; leaving out the two end days is the
+  ATO's approach. A reviewer checking each citation against the Act found all
+  of these.
+- **Review the fixes, not just the bugs.** An independent review of the fix
+  branch found three bugs the fixes introduced or missed, each reproduced
+  with a synthetic statement before it was fixed.
+
 ## 2026-10-15 — Div 775 in USD-base accounts
 
 - **A broker's "FX P/L" is measured in the broker's base currency, not yours.**

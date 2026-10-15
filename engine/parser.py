@@ -100,6 +100,9 @@ class PositionSnapshot:
     source_name: str
     as_of: date | None
     qty: dict[tuple[str, str], float]
+    # The statement it came from, before merging: its own trades are the ones
+    # the opening quantities do not include yet.
+    owner: "Statement | None" = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -474,7 +477,7 @@ def _parse_rows(reader, source_name: str) -> Statement:
             dict(cash_balances["Starting Cash"]), dict(cash_balances["Ending Cash"]), stmt))
     if saw_mtm:
         stmt.position_snapshots.append(PositionSnapshot(source_name, stmt.period_start,
-                                                        prior_qty))
+                                                        prior_qty, stmt))
     stmt.trades.sort(key=lambda t: t.dt)  # csv.reader preserves file order for ties
     return stmt
 

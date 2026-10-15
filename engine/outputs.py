@@ -123,10 +123,10 @@ def build_workpaper_csv(report: dict) -> str:
                                  "included"),
         ("current_year_losses", "Current-year capital losses (component)"),
         ("carried_losses_input", "Prior-year losses carried in (user input)"),
-        ("current_year_losses_applied",
-         "  of which current-year losses (CGT schedule item 2, label B)"),
-        ("carried_losses_applied", "  of which prior-year net losses (item 2, label C)"),
         ("losses_applied_total", "Losses applied"),
+        ("current_year_losses_applied",
+         f"  of which {lb.get('losses_current', 'current-year losses')}"),
+        ("carried_losses_applied", f"  of which {lb.get('losses_prior', 'prior-year net losses')}"),
         ("discount_applied", "CGT discount applied"),
         ("total_capital_gains_18H",
          f"Total current-year capital gains ({lb.get('gains', 'label 18H')})"),
@@ -146,10 +146,14 @@ def build_workpaper_csv(report: dict) -> str:
     _w(w, [])
     _w(w, ["SECTION", "OTHER AMOUNTS (AUD)"])
     _w(w, ["Dividends (gross) — foreign income", oi["dividends_aud"]])
-    _w(w, ["Withholding tax (FITO)", oi["withholding_tax_aud"]])
     if oi.get("withholding_above_treaty_aud"):
+        _w(w, ["Foreign tax withheld", oi["withholding_tax_aud"]])
         _w(w, ["  of which above the 15% US treaty rate (reclaim from the IRS, not FITO)",
-               oi["withholding_above_treaty_aud"]])
+               -oi["withholding_above_treaty_aud"]])
+        _w(w, ["Foreign tax withheld less that excess (FITO candidate)",
+               oi["fito_candidate_aud"]])
+    else:
+        _w(w, ["Foreign tax withheld (FITO candidate)", oi["withholding_tax_aud"]])
     if oi.get("australian_withholding_aud"):
         _w(w, ["Australian tax withheld (not FITO)", oi["australian_withholding_aud"]])
     _w(w, ["Interest (net; IBKR includes borrow fees here)", oi["interest_aud"]])

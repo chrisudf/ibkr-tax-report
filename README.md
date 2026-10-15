@@ -294,14 +294,17 @@ runs the validated refresh weekly. The report shows the coverage it used
   most US trades carry the next calendar day. IBKR's statement day ends at
   10:00 Sydney, so a statement "to 30 June" can hold rows dated 1 July — counted
   in the year of their date and listed in a warning, because next year's
-  statement may not repeat them. The ATO sets no rule on the time zone; keep
-  one convention from year to year. Income counts when IBKR credits it: June's
+  statement may not repeat them. The ATO sets no rule on the time zone; the
+  Acts Interpretation Act 1901 s 37 points to the legal time of the
+  taxpayer's State, which differs from Sydney time in Queensland, WA, SA and
+  the NT. Whichever convention is used, keep it for the whole return and from
+  year to year. Income counts when IBKR credits it: June's
   interest, credited in July, falls in the next year (a fund keeping accruals
   accounts may bring it back — the accountant's choice).
 - **Withholding**: foreign tax withheld is the foreign income tax offset
-  candidate. US withholding above the 15% treaty rate is shown separately
-  (reclaim it from the IRS; it is not part of the offset), as is any tax
-  withheld in AUD, which is Australian tax, not foreign.
+  candidate, less any US withholding above the 15% treaty rate: that excess is
+  shown separately (reclaim it from the IRS; it is not part of the offset), as
+  is any tax withheld in AUD, which is Australian tax, not foreign.
 - **Financial year defaults to the latest one that has ended** and that the
   uploaded data covers — not the year the statement happens to end in.
   Statements are pulled after 30 June, so keying off the end date alone lands
@@ -316,7 +319,8 @@ runs the validated refresh weekly. The report shows the coverage it used
 - **Written options: CGT event D2 at grant** (s 104-40(2)), never discountable
   (s 115-25(3)). Options still open at 30 June are assessable that year
   ("strict" view); a deferred/closed-basis figure, taxing each option in the
-  year it is closed (premium included), is shown for comparison. Buying a
+  year it is closed (premium included; for an option written before the
+  uploaded data, at the close-date rate), is shown for comparison. Buying a
   written option back is a capital loss equal to the buy-back cost: the
   prevailing view, on which the ATO has published no ruling (a private ruling
   gives certainty).
@@ -330,9 +334,11 @@ runs the validated refresh weekly. The report shows the coverage it used
   folded premium is translated at the rate on the day the option was written.
 - Purchased options expiring worthless: capital loss at expiry (C2, s 104-25).
 - 12-month CGT discount by entity (individual/trust 50%, complying SMSF 33⅓%,
-  company nil), losses applied against non-discountable gains first. Neither
-  the day of acquisition nor the day of the event counts towards the 12 months
-  (Acts Interpretation Act 1901 s 2G); the workpaper's `discount_from` column
+  company nil), losses applied against non-discountable gains first. Leaving
+  out the day of acquisition and the day of the event (the ATO's approach), the
+  12 months are counted as months under the Acts Interpretation Act 1901 s 2G:
+  bought 28 February 2023, the first discountable day is 1 March 2024. The
+  workpaper's `discount_from` column
   gives the first day a parcel's sale is discountable, since a day count can
   mislead (365 days is not always 12 months).
 - **Each CGT event counts on its own** in total gains (18H) and losses. An
@@ -340,8 +346,8 @@ runs the validated refresh weekly. The report shows the coverage it used
   plus a separate capital loss (the buy-back), as when the two fall in
   different years. 18A is the same as with one net figure per contract, which
   the workpaper shows for comparison. Current-year losses are applied before
-  prior-year ones (s 102-5), and the split is shown as CGT schedule item 2
-  labels B and C.
+  prior-year ones (s 102-5), and the split is shown (for entities that lodge
+  a CGT schedule, as item 2 labels B and C).
 - Corporate actions (splits, incl. option contract renames) parsed from the
   statement's Corporate Actions section; anything unrecognised becomes a
   warning, never a silent guess. Ticker changes are unified via IBKR conids.
@@ -402,7 +408,9 @@ password later.
 - **Individuals and trusts, FY2027-28 onwards: not supported.** From 1 July 2027
   the 50% discount no longer applies to their CGT events (s 115-100(aa), (ab),
   as amended by Act No 49 of 2026); assets held at 30 June 2027 are deemed sold
-  and reacquired at market value (s 112-155), and later growth is indexed. The
+  and reacquired at market value, or by choice an amount apportioned under
+  s 112-185 (individuals s 112-155; trusts s 112-165, if a beneficiary would
+  get the discount), and later growth is indexed. The
   tool refuses those years rather than give a wrong figure. For FY2026-27 it
   reminds you to keep the 30 June 2027 market values. SMSFs and companies are
   unaffected.

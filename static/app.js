@@ -299,7 +299,11 @@ function renderResults(data) {
   lbls.innerHTML = "";
   [[`Carried forward (${L.carried_short})`, s.losses_carried_forward_18V],
    ["Dividends (gross)", oi.dividends_aud],
-   ["Withholding tax", oi.withholding_tax_aud],
+   ...(oi.withholding_above_treaty_aud
+     ? [["Foreign tax withheld", oi.withholding_tax_aud],
+        ["of which above US treaty rate (not FITO)", -oi.withholding_above_treaty_aud],
+        ["FITO candidate", oi.fito_candidate_aud]]
+     : [["Foreign tax withheld (FITO candidate)", oi.withholding_tax_aud]]),
    ["Interest (net)", oi.interest_aud],
    ["Fees", oi.fees_aud],
    ["FX P/L (Div 775, income)", oi.forex_pl_aud],

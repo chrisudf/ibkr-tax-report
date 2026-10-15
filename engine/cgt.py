@@ -45,7 +45,7 @@ from datetime import date, datetime, time, timedelta
 
 from . import forex
 from .fx import RbaRates, FxError
-from .parser import Statement, Trade
+from .parser import PositionSnapshot, Statement, Trade
 
 TOOL_VERSION = "0.1.0"
 
@@ -57,22 +57,31 @@ ENTITY_DISCOUNT = {"individual": 0.5, "trust": 0.5, "smsf": 1.0 / 3.0, "company"
 # return's names (net_capital_gain_18A, ...) for every entity.
 RETURN_LABELS = {
     "individual": dict(gains="label 18H", net="label 18A", carried="label 18V",
+                       losses_current="current-year losses",
+                       losses_prior="prior-year net losses",
                        gains_short="18H", net_short="18A", carried_short="18V"),
     "smsf": dict(gains="CGT schedule item 1 label J", net="SMSF annual return item 11 label A",
                  carried="SMSF annual return item 14 label V",
+                 losses_current="current-year losses (CGT schedule item 2 label B)",
+                 losses_prior="prior-year net losses (CGT schedule item 2 label C)",
                  gains_short="CGT sch. 1J", net_short="SAR 11A", carried_short="SAR 14V"),
     "trust": dict(gains="CGT schedule item 1 label J", net="trust return item 21",
                   carried="trust return item 27",
+                  losses_current="current-year losses (CGT schedule item 2 label B)",
+                  losses_prior="prior-year net losses (CGT schedule item 2 label C)",
                   gains_short="CGT sch. 1J", net_short="trust item 21",
                   carried_short="trust item 27"),
     "company": dict(gains="CGT schedule item 1 label J", net="company return item 7",
                     carried="company return item 13",
+                    losses_current="current-year losses (CGT schedule item 2 label B)",
+                    losses_prior="prior-year net losses (CGT schedule item 2 label C)",
                     gains_short="CGT sch. 1J", net_short="company item 7",
                     carried_short="company item 13"),
 }
 # From 1 July 2027 individuals and trusts get no CGT discount (s 115-100(aa),
 # (ab) as amended by Act No 49 of 2026); assets they hold at 30 June 2027 are
-# deemed sold and reacquired at market value (s 112-155), and later growth is
+# deemed sold and reacquired at market value or an apportioned amount
+# (s 112-155 individuals, s 112-165 trusts, s 112-185), and later growth is
 # indexed (s 110-36(1A)). Not modelled: those years are refused.
 DISCOUNT_ENDS = date(2027, 7, 1)
 QTY_EPS = 1e-9
@@ -122,10 +131,11 @@ def detect_fy(stmt) -> int | None:
 def discount_from(open_d: date) -> date:
     """The first day a CGT event on an asset acquired on open_d can be
     discounted: it must be acquired at least 12 months before the event
-    (s 115-25(1)). Neither the day of acquisition nor the event day counts, so
-    the 12 months run from the next day and end the day before its anniversary
-    (Acts Interpretation Act 1901 s 2G); the event must fall on or after that
-    anniversary. Bought on 28 February 2023: 1 March 2024, not 29 February."""
+    (s 115-25(1)). Neither the day of acquisition nor the event day counts (the
+    ATO's approach), so the 12 months run from the next day, counted as months
+    under Acts Interpretation Act 1901 s 2G: they end the day before its
+    anniversary, and the event must fall on or after that anniversary. Bought
+    on 28 February 2023: 1 March 2024, not 29 February."""
     start = open_d + timedelta(days=1)
     try:
         return start.replace(year=start.year + 1)
@@ -608,6 +618,10 @@ def _normalize_symbol_renames(stmt: Statement, splits: list[SplitEvent]) -> list
                           if t.category == "Equity and Index Options"}
         option_symbols |= {p.symbol for p in stmt.open_positions
                            if p.category == "Equity and Index Options"}
+        # held at the start of a statement under the old ticker, traded only
+        # under the new one
+        option_symbols |= {sym for snap in stmt.position_snapshots for cat, sym in snap.qty
+                           if cat == "Equity and Index Options"}
         for sym in option_symbols:
             root, sep, rest = sym.partition(" ")
             if sep and root in underlying_rename:
@@ -649,6 +663,24 @@ def _normalize_symbol_renames(stmt: Statement, splits: list[SplitEvent]) -> list
     return notes
 
 
+def _row_key(t: Trade) -> tuple:
+    # a trade's identity without its symbol, which renames change
+    return (t.category, t.currency, t.dt, t.qty, round(t.proceeds, 6), round(t.comm, 6))
+
+
+def _included_in(snap: PositionSnapshot, t: Trade) -> bool:
+    """Whether a statement's opening positions already include a trade. Those
+    dated before its first day do. So do those dated on its first day that are
+    not its own rows: IBKR files rows by their US report date, so the statement
+    before carries the previous US session's trades, dated this day in Sydney
+    time, and this one does not repeat them."""
+    d = t.dt.date()
+    if d != snap.as_of:
+        return d < snap.as_of
+    own = {_row_key(o) for o in (snap.owner.trades if snap.owner else [])}
+    return snap.owner is not None and _row_key(t) not in own
+
+
 def _pre_data_lots(stmt: Statement) -> dict:
     """Positions already held when the uploaded data starts.
 
@@ -664,14 +696,13 @@ def _pre_data_lots(stmt: Statement) -> dict:
     if not snaps:
         return {}
     first = min(snaps, key=lambda p: p.as_of)
-    snap_start = datetime.combine(first.as_of, time())
     start = datetime.combine(min(first.as_of, stmt.period_start or first.as_of), time())
     lots = {}
     for (cat, sym), qty in sorted(first.qty.items()):
         if cat not in CGT_CATEGORIES:
             continue
         same = [t for t in stmt.trades if (t.category, t.symbol) == (cat, sym)]
-        qty -= sum(t.qty for t in same if t.dt < snap_start)
+        qty -= sum(t.qty for t in same if _included_in(first, t))
         if abs(qty) < QTY_EPS:
             continue
         ccy = (same[0].currency if same else None) or next(
@@ -693,12 +724,11 @@ def _snapshot_mismatches(stmt: Statement, pre_lots: dict, splits: list[SplitEven
     split_roots = {(ev.old_symbol or ev.new_symbol or "").partition(" ")[0] for ev in splits}
     out = []
     for snap in snaps[1:]:
-        start = datetime.combine(snap.as_of, time())
         held: dict = defaultdict(float)
         for key, lot in pre_lots.items():
             held[key] += lot.qty
         for t in stmt.trades:
-            if t.category in CGT_CATEGORIES and t.dt < start:
+            if t.category in CGT_CATEGORIES and _included_in(snap, t):
                 held[(t.category, t.symbol)] += t.qty
         keys = set(held) | {k for k in snap.qty if k[0] in CGT_CATEGORIES}
         diffs = [f"{sym} {snap.qty.get((cat, sym), 0.0):g} (the data adds up to "
@@ -766,11 +796,13 @@ def _entity_notes(opts: Options) -> list[str]:
         notes.append("Figures for an Australian resident individual (no foreign or temporary "
                      "resident discount limits, ss 115-105, 115-110).")
     if opts.entity in ("individual", "trust") and opts.fy_end_year == DISCOUNT_ENDS.year:
+        deemed = ("s 112-155 deems those assets" if opts.entity == "individual" else
+                  "s 112-165 deems the trust's assets (if a beneficiary would get the discount)")
         notes.append(
             "Keep the market value at 30 June 2027 of everything still held then (the Open "
             "Positions of a statement ending 30 June 2027): from 1 July 2027 the CGT discount "
-            "ends for individuals and trusts, and s 112-155 deems those assets sold and "
-            "reacquired at that value (Act No 49 of 2026).")
+            f"ends for individuals and trusts, and {deemed} sold and reacquired at that value, "
+            "or by choice at an amount apportioned under s 112-185 (Act No 49 of 2026).")
     if opts.entity == "smsf":
         notes.append(
             "Assumes the fund is wholly in accumulation phase. Exempt current pension income is "
@@ -938,7 +970,9 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
             f"{fy_label(opts.fy_end_year)} is not supported for {opts.entity}s: from 1 July 2027 "
             "the 50% CGT discount no longer applies to their CGT events (s 115-100(aa), (ab) "
             "ITAA 1997, as amended by Act No 49 of 2026). Assets held at 30 June 2027 are "
-            "deemed sold and reacquired at market value then (s 112-155), with that gain still "
+            "deemed sold and reacquired then, at market value or an apportioned amount "
+            f"({'s 112-155' if opts.entity == 'individual' else 's 112-165'}, s 112-185), "
+            "with that gain still "
             "discountable when the asset is sold, and later growth is indexed. This tool does "
             "not model those rules yet, and a figure without them would be wrong.")
 
@@ -990,12 +1024,16 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     # The folded premium keeps its own date's rate (s 960-50(6) item 5): the
     # share leg's AUD is its cash at the share trade's rate, corrected by the
     # premium's AUD at the write date less its AUD at that rate. Unknown for an
-    # option opened before the data — it stays at the share trade's rate.
+    # option opened before the data — it stays at the share trade's rate. Share
+    # trades after 30 June feed neither this year's figures nor the carry-forward
+    # table, and their rates may be past the end of the RBA table.
     aud_adj: dict[int, float] = defaultdict(float)
     for tr in pass1.transfers:
         if tr.stock_trade_idx is None or tr.pre_data:
             continue
         stock_d = trades[tr.stock_trade_idx].dt.date()
+        if stock_d > fy_end:
+            continue
         aud_adj[tr.stock_trade_idx] += (fx.to_aud(tr.cash, tr.currency, tr.option_open_dt.date())[0]
                                         - fx.to_aud(tr.cash, tr.currency, stock_d)[0])
     # Pass 2: definitive run with share-leg cash adjusted by folded premiums.
@@ -1049,15 +1087,19 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
             if m.short and is_option:
                 # Written before the data: its premium was a D2 gain of the year it
                 # was written (s 104-40(2)). Only the close leg belongs to this year.
-                g = aud_close
+                g = aud_close + m.close_aud_adj
                 note = (f"written {before_data} (premium {m.currency} {m.open_cash:,.2f} "
                         "per IBKR's basis) — its D2 gain belongs to the year it was "
                         "written; only the close leg is recognised this year")
+                # The closed-basis comparison counts the premium now; its write
+                # date is unknown, so it takes the close-date rate.
+                deferred_extra += fx.to_aud(m.open_cash, m.currency, close_d)[0]
                 if data_start_d and data_start_d > fy_start:
                     pre_maybe_this_fy.append(f"{m.symbol} ({m.currency} {m.open_cash:,.2f})")
             else:
                 aud_open, m.open_fx = fx.to_aud(m.open_cash, m.currency, close_d)
-                g = aud_open + aud_close
+                # an in-data premium folded into the closing leg keeps its own rate
+                g = aud_open + m.open_aud_adj + aud_close + m.close_aud_adj
                 note = (f"acquired {before_data}: cost per IBKR's basis, translated at the "
                         "close-date rate (acquisition date not in the files); no discount "
                         "claimed")
@@ -1141,6 +1183,10 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
             aud_g, fxr = fx.to_aud(u.close_cash_alloc, u.trade.currency, close_d)
             u.aud_gain = aud_g
             unmatched_total_aud += aud_g
+            if u.trade.ib_rpl:
+                # premium = IBKR's P/L less the close leg, at the close-date rate
+                deferred_extra += fx.to_aud(u.ib_rpl - u.close_cash_alloc, u.trade.currency,
+                                            close_d)[0]
             if data_start_d and data_start_d > fy_start:
                 pre_maybe_this_fy.append(u.trade.symbol)
         elif u.resolved and in_fy:
@@ -1223,6 +1269,16 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     for m in res.matches:
         if m.short and m.category == "Equity and Index Options":
             od, cd = m.open_dt.date(), m.close_dt.date()
+            if m.pre_data:
+                # Its date is a stand-in for "before the data", not a write date:
+                # open at 30 June, but its D2 gain belongs to the year it was written.
+                if cd > fy_end and not (data_start_d and data_start_d > fy_end + timedelta(days=1)):
+                    prior_written_notes.append(
+                        f"{m.symbol}: written {before_data}, still open at {fy_end}, closed "
+                        f"{cd} — its D2 gain belongs to the year it was written")
+                    if data_start_d and data_start_d > fy_start:
+                        pre_maybe_this_fy.append(f"{m.symbol} ({m.currency} {m.open_cash:,.2f})")
+                continue
             if fy_start <= od <= fy_end and cd > fy_end:
                 prem_aud, fxr = fx.to_aud(m.open_cash, m.currency, od)
                 d2_total += prem_aud
@@ -1299,10 +1355,17 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
         if not (fy_of(od) < fy_of(tr.dt.date()) and fy_of(tr.dt.date()) == opts.fy_end_year):
             continue
         if tr.kind != "assignment":
-            exercise_notes.append(
-                f"{tr.option_symbol}: bought {od}, exercised {tr.dt.date()} — its cost is part "
-                f"of the cost base of the {tr.stock_symbol or '(unmatched)'} shares acquired "
-                "on exercise (s 134-1(1) item 1); no D2 gain is involved.")
+            shares = tr.stock_symbol or "(unmatched)"
+            po = parse_option_symbol(tr.option_symbol)
+            if po and po[3] == "P":
+                how = (f"its cost is in the cost base of the {shares} shares disposed of on "
+                       "exercise (second element, s 134-1(1) item 2); the tool deducts it from "
+                       "the sale proceeds instead, which gives the same gain")
+            else:
+                how = (f"its cost is part of the cost base of the {shares} shares acquired "
+                       "on exercise (s 134-1(1) item 1)")
+            exercise_notes.append(f"{tr.option_symbol}: bought {od}, exercised {tr.dt.date()} "
+                                  f"— {how}; no D2 gain is involved.")
             continue
         prem_aud, _ = fx.to_aud(tr.cash, tr.currency, od)
         written_fy = fy_label(fy_of(od))
@@ -1450,7 +1513,8 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
             f"{fy_end} statement although they are dated {fy_end + timedelta(days=1)} or later in "
             "Sydney time. They are counted by their date, in the next financial year, and a "
             "next-year statement starting 1 July may not include them: upload this statement "
-            "with next year's, or count them in this year if you take the US date instead.")
+            "with next year's. Count them in this year only if the whole return uses US "
+            "dates.")
     if dropped_cash["n"]:
         warnings.append(
             f"{dropped_cash['n']} dividend/interest/fee/FX rows dated outside "
@@ -1459,7 +1523,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
 
     # ---------------- net capital gain ----------------
     gains_disc, gains_nondisc = tot["gains_disc"], tot["gains_nondisc"] + d2_total
-    losses_current = -tot["losses"]                      # positive number
+    losses_current = 0.0 - tot["losses"]                 # positive number (never -0.0)
     losses_avail = losses_current + max(opts.carried_losses, 0.0)
     # apply losses to non-discountable first (standard, taxpayer-favourable order)
     use_nd = min(losses_avail, gains_nondisc)
@@ -1510,6 +1574,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
             interest_aud=int_aud, fees_aud=fee_aud, borrow_fees_aud=bor_aud,
             forex_pl_aud=fxp_aud, forex_method=forex_method,
             australian_withholding_aud=aus_aud, withholding_above_treaty_aud=excess_aud,
+            fito_candidate_aud=round(wht_aud + excess_aud, 2),
             dividends_by_ccy=div_ccy, withholding_by_ccy=wht_ccy,
             interest_by_ccy=int_ccy),
     )
