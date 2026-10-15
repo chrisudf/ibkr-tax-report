@@ -127,3 +127,13 @@ def test_pdf_disclaimer_is_english_only(client):
     assert pdf.startswith(b"%PDF")
     # the Chinese paragraph needed reportlab's STSong-Light CID font
     assert b"STSong" not in pdf and b"UniGB" not in pdf
+
+
+def test_analyze_returns_the_div775_schedule(client):
+    d = _upload(client).get_json()
+    oi = d["summary"]["other_income"]
+    assert oi["forex_pl_aud"] == -1028.44
+    assert oi["forex_method"].startswith("computed from cash flows")
+    assert d["tables"]["fx_realisations"]["total"] == 8
+    assert d["tables"]["fx_realisations"]["rows"][0]["event"].startswith("FRE 2")
+    assert any("s 775-230" in n for n in d["forex_notes"])

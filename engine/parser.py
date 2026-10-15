@@ -77,6 +77,22 @@ class CashItem:
 
 
 @dataclass
+class CashReport:
+    """Starting and ending cash per currency from one statement's Cash Report,
+    used to anchor opening foreign-currency balances and to check that the
+    cash flows read from the other sections are complete."""
+    source_name: str
+    period_start: date | None
+    period_end: date | None
+    start: dict[str, float]
+    end: dict[str, float]
+    # The statement this report came from, before merging: its ending cash
+    # includes rows dated outside its own period, so it is checked against that
+    # file's own rows, not a date window of the merged data.
+    owner: "Statement | None" = field(default=None, repr=False, compare=False)
+
+
+@dataclass
 class Statement:
     source_name: str
     title: str = ""
@@ -95,7 +111,9 @@ class Statement:
     interest: list[CashItem] = field(default_factory=list)
     fees: list[CashItem] = field(default_factory=list)
     borrow_fees: list[CashItem] = field(default_factory=list)
-    forex_pl: list[CashItem] = field(default_factory=list)   # Div 775 ordinary income items
+    forex_pl: list[CashItem] = field(default_factory=list)   # IBKR's FX P/L, in base currency
+    deposits: list[CashItem] = field(default_factory=list)   # deposits (+) / withdrawals (-)
+    cash_reports: list[CashReport] = field(default_factory=list)
     conid_symbols: dict[str, list[str]] = field(default_factory=dict)  # conid -> symbols seen
     conid_current: dict[str, str] = field(default_factory=dict)        # conid -> current symbol
     code_legend: dict[str, str] = field(default_factory=dict)
@@ -246,6 +264,7 @@ def _parse_rows(reader, source_name: str) -> Statement:
     stmt = Statement(source_name=source_name)
     sections: dict[str, _Section] = {}
     saw_statement_section = False
+    cash_balances: dict[str, dict[str, float]] = {"Starting Cash": {}, "Ending Cash": {}}
 
     for row in reader:
         if len(row) < 2:
@@ -297,7 +316,10 @@ def _parse_rows(reader, source_name: str) -> Statement:
                     dt=_dt(sec.get(row, "Date/Time")),
                     qty=_num(sec.get(row, "Quantity")),
                     proceeds=_num(sec.get(row, "Proceeds")),
-                    comm=_num(sec.get(row, "Comm/Fee") or sec.get(row, "Comm in USD")),
+                    # the forex subsection names its commission column after the
+                    # base currency ("Comm in USD", "Comm in AUD", ...)
+                    comm=_num(sec.get(row, "Comm/Fee") or sec.get(row, next(
+                        (c for c in sec.cols if c.startswith("Comm in ")), "Comm in USD"))),
                     ib_basis=_num(sec.get(row, "Basis")),
                     ib_rpl=_num(sec.get(row, "Realized P/L")),
                     codes=frozenset(c for c in code_s.split(";") if c),
@@ -351,6 +373,20 @@ def _parse_rows(reader, source_name: str) -> Statement:
                 continue
             stmt.fees.append(CashItem(cur, _d(ds), sec.get(row, "Description"),
                                       _num(sec.get(row, "Amount"))))
+
+        elif sec_name == "Deposits & Withdrawals":
+            cur = sec.get(row, "Currency")
+            ds = sec.get(row, "Settle Date").strip()
+            if not ds or cur.startswith("Total"):
+                continue
+            stmt.deposits.append(CashItem(cur, _d(ds), sec.get(row, "Description"),
+                                          _num(sec.get(row, "Amount"))))
+
+        elif sec_name == "Cash Report":
+            label, cur = sec.get(row, "Currency Summary"), sec.get(row, "Currency")
+            if label in ("Starting Cash", "Ending Cash") and cur and \
+                    cur != "Base Currency Summary":
+                cash_balances[label][cur] = _num(sec.get(row, "Total"))
 
         elif sec_name == "Borrow Fee Details":
             cur = sec.get(row, "Currency")
@@ -407,6 +443,10 @@ def _parse_rows(reader, source_name: str) -> Statement:
             f"IBKR Activity Statement / Realized Summary CSV export. {_EXPORT_HINT}")
     if not stmt.trades and not stmt.dividends and not stmt.interest:
         stmt.warnings.append(f"{source_name}: statement contains no trades or income rows.")
+    if cash_balances["Starting Cash"] or cash_balances["Ending Cash"]:
+        stmt.cash_reports.append(CashReport(
+            source_name, stmt.period_start, stmt.period_end,
+            dict(cash_balances["Starting Cash"]), dict(cash_balances["Ending Cash"]), stmt))
     stmt.trades.sort(key=lambda t: t.dt)  # csv.reader preserves file order for ties
     return stmt
 
@@ -467,9 +507,11 @@ def merge_statements(stmts: list[Statement]) -> Statement:
         lambda a: (a.category, a.dt, a.description, a.qty),
         [s.corporate_actions for s in stmts])
     out.corporate_actions.sort(key=lambda a: a.dt)
-    for attr in ("dividends", "withholding_tax", "interest", "fees", "borrow_fees", "forex_pl"):
+    for attr in ("dividends", "withholding_tax", "interest", "fees", "borrow_fees", "forex_pl",
+                 "deposits"):
         setattr(out, attr, sorted(dedupe(ci_key, [getattr(s, attr) for s in stmts]),
                                   key=lambda x: x.d))
+    out.cash_reports = [r for s in stmts for r in s.cash_reports]   # stmts sorted by period
 
     # Overlap sanity note
     periods = [(s.period_start, s.period_end, s.source_name) for s in stmts

@@ -70,7 +70,8 @@
       <div class="dz-icon">&#8681;</div>
       <div class="dz-title">Drop IBKR statement CSVs here</div>
       <div class="dz-sub">or <span class="link">browse files</span> — CSV exports only: the
-        1 July – 30 June Activity Statement, the Realized Summary for the same year (FX P/L),
+        1 July – 30 June Activity Statement, the Realized Summary for the same year (FX P/L —
+        needed only for an AUD base-currency account),
         and an Activity Statement from 1 July (or earlier) to past the expiry of options
         open at year end (what happened to them). Earlier years add FIFO history.
         Up to 12 files, {{ max_upload_mb }} MB in total.</div>
@@ -121,6 +122,7 @@
       <p class="expiry" id="expiry-note"></p>
       <div class="headline" id="headline"></div>
       <div class="labels-row" id="ato-labels"></div>
+      <details class="fx-notes" id="fx-notes" hidden></details>
     </section>
 
     <section class="card warn-card" id="warnings-card" hidden>

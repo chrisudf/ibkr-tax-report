@@ -195,10 +195,12 @@ const TABLE_DEFS = {
   transfers: { title: "Assignments / exercises", cols: ["option", "kind", "date", "option_written", "qty", "premium_native", "folded_into"] },
   carry_forward: { title: "Carry-forward parcels", cols: ["category", "symbol", "qty", "acquired", "cost_native", "currency", "fx", "cost_aud"] },
   unmatched: { title: "Unmatched closes", cols: ["category", "symbol", "close_date", "qty", "close_cash", "ib_realized_pl", "gain_aud", "note"] },
+  fx_realisations: { title: "Div 775 FX realisations", cols: ["date", "currency", "event", "units", "aud_value", "aud_cost", "gain_aud", "acquired", "source"] },
 };
 const NUM_COLS = new Set(["qty", "open_cash", "close_cash", "gain_native", "gain_aud",
   "premium_native", "premium_aud", "cost_native", "cost_aud", "ib_realized_pl",
-  "days_held", "fx", "my_qty", "stmt_qty", "my_cost", "stmt_cost", "mine", "ibkr", "diff"]);
+  "days_held", "fx", "my_qty", "stmt_qty", "my_cost", "stmt_cost", "mine", "ibkr", "diff",
+  "units", "aud_value", "aud_cost"]);
 
 function td(col, v) {
   const cell = document.createElement("td");
@@ -308,6 +310,21 @@ function renderResults(data) {
     span.append(k + ": ", b);
     lbls.appendChild(span);
   });
+  const fxBox = $("fx-notes");
+  fxBox.innerHTML = "";
+  if (oi.forex_method) {
+    const sum = document.createElement("summary");
+    sum.textContent = `Div 775 (FX): ${oi.forex_method}`;
+    fxBox.appendChild(sum);
+    const ul = document.createElement("ul");
+    (data.forex_notes || []).forEach((n) => {
+      const li = document.createElement("li");
+      li.textContent = n;
+      ul.appendChild(li);
+    });
+    fxBox.appendChild(ul);
+  }
+  fxBox.hidden = !oi.forex_method;
 
   const warn = data.warnings || [];
   $("warnings-card").hidden = warn.length === 0;

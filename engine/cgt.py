@@ -41,6 +41,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
+from . import forex
 from .fx import RbaRates, FxError
 from .parser import Statement, Trade
 
@@ -531,6 +532,76 @@ def _sum_cash_aud(items, fx: RbaRates, window: tuple[date, date], dropped: dict)
     return rows, round(total_aud, 2), {k: round(v, 2) for k, v in by_ccy.items()}
 
 
+def _div775_from_cash(stmt: Statement, fx: RbaRates, fy_start: date, fy_end: date,
+                      fy_end_year: int, warnings: list[str]):
+    """Div 775 for an account whose IBKR base currency is not AUD (engine/forex.py).
+
+    IBKR's Forex P/L Details for such an account measures its non-base balances
+    (typically AUD cash) in the base currency. For an Australian resident AUD is
+    not a foreign currency, and the base-currency cash itself — the actual
+    exposure — is not in that section at all, so it is not used."""
+    base = stmt.base_currency or "the base currency"
+    res = forex.compute(stmt, fx, fy_start, fy_end)
+    rows, notes = res["rows"], []
+    n2 = sum(1 for r in rows if r["event"].startswith("FRE 2"))
+    notes.append(
+        f"Div 775 on foreign-currency cash is computed from the statements' cash flows: "
+        f"{len(rows)} realisation(s) in {fy_label(fy_end_year)} — {n2} FRE 2 (spending, "
+        f"converting or withdrawing a credit balance, s 775-45) and {len(rows) - n2} FRE 4 "
+        f"(paying back a debit balance, s 775-55); gains A${res['gains_aud']:,.2f}, losses "
+        f"A${-res['losses_aud']:,.2f}, net {'-' if res['total_aud'] < 0 else ''}"
+        f"A${abs(res['total_aud']):,.2f}. Units are matched "
+        "first-in first-out (s 775-145(1)). AUD values are RBA daily rates, except for "
+        "conversions to or from AUD, which use the trade's own AUD amount.")
+    for r in res["reconciliation"]:
+        line = (f"{r['currency']} cash in {r['source']} ({r['period']}): start "
+                f"{r['start']:,.2f} + flows read {r['flows']:,.2f} = "
+                f"{r['start'] + r['flows']:,.2f}, against IBKR's ending cash {r['end']:,.2f}")
+        if abs(r["gap"]) <= forex.RECONCILE_TOLERANCE:
+            notes.append(line + (f" — reconciles within {abs(r['gap']):,.2f} (the statement "
+                                 "does not itemise GST charged on fees)."
+                                 if abs(r["gap"]) >= 0.005 else " — reconciles."))
+        else:
+            warnings.append(
+                f"DIV 775 MAY BE INCOMPLETE — {line}: a gap of {r['gap']:,.2f} "
+                f"{r['currency']}. Some cash movements are not itemised in the sections this "
+                "tool reads (for example cash from a corporate action, or a transfer between "
+                "accounts). Review them before relying on the FX figure.")
+    if not stmt.cash_reports:
+        warnings.append(
+            "No Cash Report section in the uploaded files: opening foreign-currency balances "
+            "are taken as zero for Div 775, and the cash flows cannot be checked against "
+            "IBKR's totals. The Activity Statement CSV (file (a)) has one.")
+    for n in res["notes"]:
+        warnings.append("DIV 775 OPENING BALANCE — " + n)
+    if stmt.forex_pl:
+        notes.append(
+            f"IBKR's 'Forex P/L Details' (Realized Summary) measures this {base}-base "
+            f"account's other balances, such as AUD cash, in {base}. For an Australian "
+            f"resident AUD is not a foreign currency and the {base} cash itself is not "
+            "covered, so that section is not used.")
+    for ccy, c in sorted(res["closing"].items()):
+        credit = c["units"] > 0
+        notes.append(
+            f"{ccy} {'credit' if credit else 'debit'} balance carried past {fy_end}: "
+            f"{abs(c['units']):,.2f}, FIFO "
+            f"{'forex cost base' if credit else 'proceeds of assuming the obligation'} "
+            f"A${abs(c['aud_cost']):,.2f}. Next year's figure needs this year's statements "
+            "uploaded together with next year's.")
+    notes.append(
+        "Not applied, because they depend on elections and facts outside the statements: "
+        "the $250,000 balance election (s 775-230), under which FRE 2 gains and losses on a "
+        "qualifying forex account with a credit balance, and FRE 4 on one with a debit "
+        "balance, are disregarded while its balance test is met (whether an IBKR account is "
+        "a qualifying forex account is a question for a tax agent); the retranslation "
+        "election (s 775-270); and the weighted-average alternative to FIFO. Cash movements "
+        "are dated at trade date: forex effects between a trade in a share or option and "
+        "its settlement are folded into the capital gain under the 12-month rule "
+        "(ss 775-70, 775-75).")
+    method = "computed from cash flows: FIFO on foreign-currency cash (s 775-145)"
+    return [], res["total_aud"], method, rows, notes
+
+
 def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = None) -> dict:
     fx = fx or RbaRates()
     warnings = list(stmt.warnings)
@@ -830,17 +901,25 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     int_rows, int_aud, int_ccy = _sum_cash_aud(stmt.interest, fx, fy_win, dropped_cash)
     fee_rows, fee_aud, fee_ccy = _sum_cash_aud(stmt.fees, fx, fy_win, dropped_cash)
     bor_rows, bor_aud, bor_ccy = _sum_cash_aud(stmt.borrow_fees, fx, fy_win, dropped_cash)
-    fxp_rows, fxp_aud, fxp_ccy = _sum_cash_aud(stmt.forex_pl, fx, fy_win, dropped_cash)
+    fx_real_rows, forex_notes = [], []
+    if (stmt.base_currency or "").upper() == "AUD":
+        # IBKR's Forex P/L Details measures the account's non-base balances in the
+        # base currency; with an AUD base that is the foreign cash, in AUD.
+        fxp_rows, fxp_aud, _ = _sum_cash_aud(stmt.forex_pl, fx, fy_win, dropped_cash)
+        forex_method = "IBKR Forex P/L Details (AUD base-currency account)"
+        if not stmt.forex_pl and any(t.category == "Forex" for t in stmt.trades):
+            warnings.append(
+                "Forex trades exist but no 'Forex P/L Details' section was found. Realised "
+                "FX gains/losses (Div 775, ordinary income) are NOT included — also upload "
+                "the Realized Summary export, which contains that section.")
+    else:
+        fxp_rows, fxp_aud, forex_method, fx_real_rows, forex_notes = _div775_from_cash(
+            stmt, fx, fy_start, fy_end, opts.fy_end_year, warnings)
     if dropped_cash["n"]:
         warnings.append(
             f"{dropped_cash['n']} dividend/interest/fee/FX rows dated outside "
             f"{fy_label(opts.fy_end_year)} were excluded from Other amounts — they belong "
             "to another year's return.")
-    if not stmt.forex_pl and any(t.category == "Forex" for t in stmt.trades):
-        warnings.append(
-            "Forex trades exist but no 'Forex P/L Details' section was found. Realised FX "
-            "gains/losses (Div 775, ordinary income) are NOT included — also upload the "
-            "Realized Summary export, which contains that section.")
 
     # ---------------- net capital gain ----------------
     gains_disc, gains_nondisc = tot["gains_disc"], tot["gains_nondisc"] + d2_total
@@ -879,7 +958,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
         other_income=dict(
             dividends_aud=div_aud, withholding_tax_aud=wht_aud,
             interest_aud=int_aud, fees_aud=fee_aud, borrow_fees_aud=bor_aud,
-            forex_pl_aud=fxp_aud,
+            forex_pl_aud=fxp_aud, forex_method=forex_method,
             dividends_by_ccy=div_ccy, withholding_by_ccy=wht_ccy,
             interest_by_ccy=int_ccy),
     )
@@ -904,6 +983,8 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
         transfers=transfer_rows,
         carry_forward=carry_rows,
         unmatched=unmatched_rows,
+        fx_realisations=fx_real_rows,
+        forex_notes=forex_notes,
         amendment_flags=amendment_flags,
         cross_year_notes=prior_written_notes + d2_later_closed + d2_later_assigned,
         other_income=dict(dividends=div_rows, withholding_tax=wht_rows, interest=int_rows,
