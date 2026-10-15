@@ -934,6 +934,62 @@ def test_cash_items_on_fy_boundaries_included():
     assert not any("dated outside" in w for w in rep["warnings"])
 
 
+def test_rows_dated_after_the_statement_end_are_listed():
+    """IBKR's statement day ends 10:00 Sydney: a 30 June statement carries rows
+    dated 1 July, which next year's statement may not repeat."""
+    rep = run([trade("Stocks", "XYZ", "2025-09-01, 10:00:00", 10, -1000, 0, code="O")],
+              period="July 1, 2025 - June 30, 2026", cash_start={"USD": 0.0},
+              dividends=[_div("2026-07-01", 12.34, "XYZ(US0000000004) Cash Dividend")])
+    (w,) = [w for w in rep["warnings"] if "appear in the statement ending 2026-06-30" in w]
+    assert "dividend 2026-07-01 USD 12.34" in w and "10:00 Sydney" in w
+    assert rep["summary"]["other_income"]["dividends_aud"] == 0.0     # counted by its date
+
+
+def _wht(d, amt, desc="ABC(US0000000005) Cash Dividend USD 1.00 per Share - US Tax"):
+    return ["Withholding Tax", "Data", "USD", d, desc, amt]
+
+
+@pytest.mark.parametrize("withheld,excess_usd", [
+    ([-30.0], 15.0),                 # 30%: half of it is above the treaty rate
+    ([-15.0], 0.0),                  # 15%: the treaty rate
+    ([-30.0, 30.0, -15.0], 0.0),     # charged at 30%, reversed, charged again at 15%
+])
+def test_us_withholding_above_the_treaty_rate_is_shown(withheld, excess_usd):
+    rep = run([], dividends=[_div("2025-11-14", 100.0,
+                                  "ABC(US0000000005) Cash Dividend USD 1.00 per Share")],
+              wht=[_wht("2025-11-14", a) for a in withheld])
+    oi = rep["summary"]["other_income"]
+    expected = FX.to_aud(excess_usd, "USD", dt.date(2025, 11, 14))[0] if excess_usd else 0.0
+    assert oi["withholding_above_treaty_aud"] == pytest.approx(expected, abs=0.01)
+    assert any("15% treaty rate on ABC" in w for w in rep["warnings"]) == bool(excess_usd)
+
+
+def test_tax_withheld_in_aud_is_not_a_foreign_tax_offset():
+    rep = run([], interest=[["Interest", "Data", "AUD", "2025-10-02",
+                             "AUD Credit Interest for Sep-2025", 120.00]],
+              wht=[["Withholding Tax", "Data", "AUD", "2025-10-02",
+                    "Withholding @ 10% on Credit Interest for Sep-2025", -12.00],
+                   _wht("2025-10-02", -3.0)])
+    oi = rep["summary"]["other_income"]
+    assert oi["australian_withholding_aud"] == -12.00
+    assert oi["withholding_tax_aud"] == pytest.approx(FX.to_aud(-3.0, "USD",
+                                                               dt.date(2025, 10, 2))[0], abs=0.01)
+    assert any("Australian tax withheld, not foreign tax" in w for w in rep["warnings"])
+
+
+def test_no_rate_past_the_end_of_the_table_except_a_weekend(tmp_path):
+    """Rates are never extrapolated: after the table's last day only the weekend
+    straight after it may use that day's rate."""
+    from engine.fx import FxError
+    p = tmp_path / "f11.csv"
+    p.write_text("Title,A$1=USD\n04-Jan-2023,0.68\n05-Jan-2023,0.681\n06-Jan-2023,0.682\n")
+    table = RbaRates([str(p)])                                       # ends Friday 6 Jan
+    assert table.rate("USD", dt.date(2023, 1, 8)) == (0.682, dt.date(2023, 1, 6))   # Sunday
+    with pytest.raises(FxError, match="the rate table ends 2023-01-06"):
+        table.rate("USD", dt.date(2023, 1, 9))                        # Monday
+    assert table.rate("USD", dt.date(2023, 1, 5)) == (0.681, dt.date(2023, 1, 5))
+
+
 def test_carry_forward_is_the_parcels_held_at_30_june():
     """A statement running past 30 June (file (c)) must not move the parcels
     carried into next year: sold in July still counts, bought in July does not."""

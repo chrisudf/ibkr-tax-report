@@ -290,6 +290,18 @@ runs the validated refresh weekly. The report shows the coverage it used
 - Every leg translated at the **RBA daily rate for its own date** (s 960-50
   ITAA 1997): cost base at the acquisition-date rate, capital proceeds at the
   CGT-event-date rate.
+- **Dates are IBKR's, in Sydney time** (AEST/AEDT), as the CSV gives them:
+  most US trades carry the next calendar day. IBKR's statement day ends at
+  10:00 Sydney, so a statement "to 30 June" can hold rows dated 1 July — counted
+  in the year of their date and listed in a warning, because next year's
+  statement may not repeat them. The ATO sets no rule on the time zone; keep
+  one convention from year to year. Income counts when IBKR credits it: June's
+  interest, credited in July, falls in the next year (a fund keeping accruals
+  accounts may bring it back — the accountant's choice).
+- **Withholding**: foreign tax withheld is the foreign income tax offset
+  candidate. US withholding above the 15% treaty rate is shown separately
+  (reclaim it from the IRS; it is not part of the offset), as is any tax
+  withheld in AUD, which is Australian tax, not foreign.
 - **Financial year defaults to the latest one that has ended** and that the
   uploaded data covers — not the year the statement happens to end in.
   Statements are pulled after 30 June, so keying off the end date alone lands

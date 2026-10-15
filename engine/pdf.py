@@ -141,7 +141,12 @@ METHOD_POINTS = [
     ("Translation", "Every leg is translated to AUD at the RBA daily rate for its own "
      "transaction date (s 960-50 ITAA 1997): cost base at acquisition-date rate, capital "
      "proceeds at CGT-event-date rate. Weekend/holiday dates fall back to the most recent "
-     "prior published rate."),
+     "prior published rate; a date after the end of the rate table stops the run."),
+    ("Dates", "Dates are those of IBKR's CSV, in Sydney time (AEST/AEDT): most US trades "
+     "carry the next calendar day. IBKR's statement day ends at 10:00 Sydney, so a statement "
+     "ending 30 June can hold rows dated 1 July; they are counted in the year of their date "
+     "and listed in a warning. The ATO gives no rule on which time zone to use; the same "
+     "convention should be kept from year to year."),
     ("Lot matching", "First-in-first-out per symbol, matching IBKR's default. Realised "
      "gain per parcel = opening cashflow + closing cashflow (both signed, inclusive of "
      "commissions), valid for long and short parcels."),
@@ -265,6 +270,11 @@ def build_pdf(report: dict) -> bytes:
     el.append(_kv_table([
         ("Dividends, gross (foreign income)", oi["dividends_aud"]),
         ("Foreign withholding tax (FITO candidate)", oi["withholding_tax_aud"]),
+        *([("    of which above the 15% US treaty rate — reclaim from the IRS, not FITO",
+            oi["withholding_above_treaty_aud"])] if oi.get("withholding_above_treaty_aud")
+          else []),
+        *([("Australian tax withheld in AUD (not FITO)", oi["australian_withholding_aud"])]
+          if oi.get("australian_withholding_aud") else []),
         ("Interest, net (IBKR nets borrow fees into this figure)", oi["interest_aud"]),
         ("Account fees (review deductibility)", oi["fees_aud"]),
         ("Realised FX gain/loss — ordinary income, Div 775 (not CGT)", oi["forex_pl_aud"]),

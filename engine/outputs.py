@@ -71,6 +71,8 @@ TABLES = {
 OTHER_INCOME_TABLES = {
     "dividends": "Dividends (gross)",
     "withholding_tax": "Withholding tax (foreign income tax offset)",
+    "australian_withholding": "Australian tax withheld in AUD (NOT a foreign income tax "
+                              "offset)",
     "interest": "Interest (IBKR nets borrow fees into this section — do not deduct "
                 "Borrow Fee Details again)",
     "fees": "Account fees (possible deduction — verify nature)",
@@ -138,6 +140,11 @@ def build_workpaper_csv(report: dict) -> str:
     _w(w, ["SECTION", "OTHER AMOUNTS (AUD)"])
     _w(w, ["Dividends (gross) — foreign income", oi["dividends_aud"]])
     _w(w, ["Withholding tax (FITO)", oi["withholding_tax_aud"]])
+    if oi.get("withholding_above_treaty_aud"):
+        _w(w, ["  of which above the 15% US treaty rate (reclaim from the IRS, not FITO)",
+               oi["withholding_above_treaty_aud"]])
+    if oi.get("australian_withholding_aud"):
+        _w(w, ["Australian tax withheld (not FITO)", oi["australian_withholding_aud"]])
     _w(w, ["Interest (net; IBKR includes borrow fees here)", oi["interest_aud"]])
     _w(w, ["Account fees (review deductibility)", oi["fees_aud"]])
     _w(w, ["Realised FX gain/loss (Div 775 ordinary income)", oi["forex_pl_aud"]])

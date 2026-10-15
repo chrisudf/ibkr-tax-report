@@ -692,6 +692,48 @@ def _snapshot_mismatches(stmt: Statement, pre_lots: dict, splits: list[SplitEven
     return out
 
 
+def _withholding_above_treaty(stmt: Statement, fx: RbaRates, window) -> tuple[float, list]:
+    """US withholding above the 15% Australia–US treaty rate on portfolio
+    dividends, in AUD, and the symbols it applies to. The "US Tax" rows of one
+    security and date are netted first — IBKR reverses a charge and posts it
+    again — then compared with that day's dividend."""
+    fy_start, fy_end = window
+    dividends, withheld = defaultdict(float), defaultdict(float)
+    for it in stmt.dividends:
+        dividends[(it.d, it.description.split("(")[0].strip())] += it.amount
+    for it in stmt.withholding_tax:
+        if "US Tax" in it.description and fy_start <= it.d <= fy_end:
+            withheld[(it.d, it.currency, it.description.split("(")[0].strip())] += it.amount
+    excess, syms = 0.0, []
+    for (d, ccy, sym), amount in sorted(withheld.items()):
+        gross = dividends.get((d, sym), 0.0)
+        over = -amount - 0.15 * gross
+        if gross > 0 and over > 0.005 + 0.001 * gross:   # rounding of a 15% charge
+            excess += fx.to_aud(over, ccy, d)[0]
+            if sym not in syms:
+                syms.append(sym)
+    return round(excess, 2), syms
+
+
+def _rows_after_statement_end(stmt: Statement, fy_end: date) -> list[str]:
+    """Rows a statement ending on the FY end dates after it. IBKR's statement
+    day runs to 10:00 Sydney the next morning and rows are filed by their US
+    report date, so a 30 June statement carries rows dated 1 July in Sydney
+    time — rows the next year's statement starting 1 July may not repeat."""
+    out = []
+    for rep in stmt.cash_reports:
+        own = rep.owner
+        if own is None or own.period_end != fy_end:
+            continue
+        for label, items in (("dividend", own.dividends), ("withholding", own.withholding_tax),
+                             ("interest", own.interest), ("fee", own.fees)):
+            out += [f"{label} {it.d} {it.currency} {it.amount:,.2f}"
+                    for it in items if it.d > fy_end]
+        out += [f"trade {t.symbol} {t.dt.date()}" for t in own.trades
+                if t.dt.date() > fy_end and t.category in CGT_CATEGORIES]
+    return out
+
+
 def _d2_outcome_warning(unresolved: list, data_end: date | None, fy_end: date) -> str:
     """Warning for D2 premiums whose post-30-June fate the uploaded data cannot show.
 
@@ -1281,7 +1323,13 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     fy_win = (fy_start, fy_end)
     dropped_cash = {"n": 0}
     div_rows, div_aud, div_ccy = _sum_cash_aud(stmt.dividends, fx, fy_win, dropped_cash)
-    wht_rows, wht_aud, wht_ccy = _sum_cash_aud(stmt.withholding_tax, fx, fy_win, dropped_cash)
+    # Tax withheld in AUD (on AUD interest, say) is Australian, not a foreign
+    # income tax: it is no FITO, and IBKR should not normally withhold it.
+    foreign_wht = [it for it in stmt.withholding_tax if it.currency != "AUD"]
+    aus_wht = [it for it in stmt.withholding_tax if it.currency == "AUD"]
+    wht_rows, wht_aud, wht_ccy = _sum_cash_aud(foreign_wht, fx, fy_win, dropped_cash)
+    aus_rows, aus_aud, _ = _sum_cash_aud(aus_wht, fx, fy_win, dropped_cash)
+    excess_aud, excess_syms = _withholding_above_treaty(stmt, fx, fy_win)
     int_rows, int_aud, int_ccy = _sum_cash_aud(stmt.interest, fx, fy_win, dropped_cash)
     fee_rows, fee_aud, fee_ccy = _sum_cash_aud(stmt.fees, fx, fy_win, dropped_cash)
     bor_rows, bor_aud, bor_ccy = _sum_cash_aud(stmt.borrow_fees, fx, fy_win, dropped_cash)
@@ -1299,6 +1347,30 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     else:
         fxp_rows, fxp_aud, forex_method, fx_real_rows, forex_notes = _div775_from_cash(
             stmt, fx, fy_start, fy_end, opts.fy_end_year, warnings)
+    if aus_rows:
+        warnings.append(
+            f"A${-aus_aud:,.2f} was withheld in AUD ({'; '.join(r['description'] for r in aus_rows)}). "
+            "That is Australian tax withheld, not foreign tax, so it is not part of the foreign "
+            "income tax offset; it is shown separately. IBKR normally withholds it only when it "
+            "does not hold the account's TFN or Australian residency — check those with IBKR, "
+            "then claim it as tax withheld or ask IBKR to refund it.")
+    if excess_aud:
+        warnings.append(
+            f"US dividend withholding above the 15% treaty rate on {', '.join(excess_syms)}: "
+            f"A${excess_aud:,.2f} of the foreign tax withheld. A foreign income tax offset is "
+            "available only for tax correctly levied under the Australia–US tax treaty; the "
+            "excess is for reclaiming from the IRS, not the offset. Usually IBKR has no valid "
+            "W-8BEN (individuals) or W-8BEN-E (funds, companies) for the account — check it.")
+    late = _rows_after_statement_end(stmt, fy_end)
+    if late:
+        warnings.append(
+            f"{len(late)} row(s) dated after {fy_end} appear in the statement ending {fy_end}: "
+            f"{', '.join(late[:8])}{' …' if len(late) > 8 else ''}. IBKR's statement day ends at "
+            "10:00 Sydney time and it files rows by their US report date, so these belong to its "
+            f"{fy_end} statement although they are dated {fy_end + timedelta(days=1)} or later in "
+            "Sydney time. They are counted by their date, in the next financial year, and a "
+            "next-year statement starting 1 July may not include them: upload this statement "
+            "with next year's, or count them in this year if you take the US date instead.")
     if dropped_cash["n"]:
         warnings.append(
             f"{dropped_cash['n']} dividend/interest/fee/FX rows dated outside "
@@ -1355,6 +1427,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
             dividends_aud=div_aud, withholding_tax_aud=wht_aud,
             interest_aud=int_aud, fees_aud=fee_aud, borrow_fees_aud=bor_aud,
             forex_pl_aud=fxp_aud, forex_method=forex_method,
+            australian_withholding_aud=aus_aud, withholding_above_treaty_aud=excess_aud,
             dividends_by_ccy=div_ccy, withholding_by_ccy=wht_ccy,
             interest_by_ccy=int_ccy),
     )
@@ -1384,7 +1457,8 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
         amendment_flags=amendment_flags,
         cross_year_notes=prior_written_notes + d2_later_closed + d2_later_assigned
         + exercise_notes,
-        other_income=dict(dividends=div_rows, withholding_tax=wht_rows, interest=int_rows,
+        other_income=dict(dividends=div_rows, withholding_tax=wht_rows,
+                          australian_withholding=aus_rows, interest=int_rows,
                           fees=fee_rows, borrow_fees=bor_rows, forex_pl=fxp_rows),
         reconciliation=dict(
             rows_checked=row_ok + row_bad, rows_ok=row_ok, rows_mismatched=row_bad,

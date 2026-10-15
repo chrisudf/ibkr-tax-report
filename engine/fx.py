@@ -77,6 +77,14 @@ class RbaRates:
         table = self.rates.get(ccy)
         if not table:
             raise FxError(f"no RBA rate series for {ccy}")
+        last = self.last_date[ccy]
+        # Past the end of the table the last rate may already have been followed
+        # by another: only a weekend straight after it is safe, as none is
+        # published then. Anything else is extrapolation, which this never does.
+        if d > last and any((last + timedelta(days=k)).weekday() < 5
+                            for k in range(1, (d - last).days + 1)):
+            raise FxError(f"no RBA {ccy} rate for {d}: the rate table ends {last}. Refresh "
+                          "the RBA table (see the README, 'RBA exchange rates').")
         dd = d
         for _ in range(MAX_BACKTRACK_DAYS + 1):
             if dd in table:
