@@ -120,6 +120,29 @@ Doing it by hand instead of the setup script:
 | run web UI | `.venv/bin/python app.py` | `.venv\Scripts\python app.py` |
 | run tests | `.venv/bin/python -m pytest tests/` | `.venv\Scripts\python -m pytest tests\` |
 
+### Local and hosted mode
+
+`python app.py` starts in **local mode** (the default): the page says nothing
+leaves the machine, and there is no rate limit. Setting `IBKR_TAX_HOSTED=1`
+switches the same app to **hosted mode**, which is what
+https://cgt.nomad403.cc runs: the page carries the hosted privacy notes
+instead, and reports are rate-limited per address (10 a minute, 60 an hour).
+Use it to preview the hosted page before deploying; it still binds
+127.0.0.1:5173 only.
+
+| | macOS / Linux | Windows (PowerShell) |
+|---|---|---|
+| local mode | `.venv/bin/python app.py` | `.\.venv\Scripts\python.exe app.py` |
+| hosted mode | `IBKR_TAX_HOSTED=1 .venv/bin/python app.py` | `$env:IBKR_TAX_HOSTED = "1"; .\.venv\Scripts\python.exe app.py` |
+| back to local | (the variable applied to that command only) | `Remove-Item Env:IBKR_TAX_HOSTED`, then run again |
+
+In PowerShell the variable stays set for the rest of that terminal session,
+so remove it (or open a new terminal) to go back to local mode. The other
+settings (`IBKR_TAX_RESULT_TTL_MINUTES`, `IBKR_TAX_RATE_LIMIT`, …) are listed
+at the top of [`app.py`](app.py) and work the same way. The real server runs
+the hosted mode under gunicorn in a container — see
+[`deploy/README.md`](deploy/README.md).
+
 CLI (same engine) — shown for macOS/Linux; on Windows swap the interpreter
 path for `.venv\Scripts\python`:
 
