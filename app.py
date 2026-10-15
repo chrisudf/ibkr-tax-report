@@ -510,6 +510,7 @@ def _report_response(uploads: list[tuple[str, bytes]], form, demo: bool = False)
             fx_realisations=preview(report["fx_realisations"]),
         ),
         forex_notes=report["forex_notes"],
+        entity_notes=report["entity_notes"],
         downloads=dict(
             csv=f"/api/download/{token}/csv",
             pdf=f"/api/download/{token}/pdf",

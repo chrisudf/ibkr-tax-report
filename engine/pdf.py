@@ -168,10 +168,11 @@ METHOD_POINTS = [
      "against non-discountable gains first. Neither the acquisition day nor the event "
      "day counts (Acts Interpretation Act 1901 s 2G): bought 28 February 2023, the "
      "first discountable day is 1 March 2024."),
-    ("Gains and losses", "Each CGT event is counted on its own in total gains (18H) and "
+    ("Gains and losses", "Each CGT event is counted on its own in total gains and "
      "losses: an option written and bought back in the same year is a D2 gain (the "
      "premium) and a separate capital loss (the buy-back), as when the two fall in "
-     "different years. 18A is the same as with one net figure per contract, which is "
+     "different years. The net capital gain is the same as with one net figure per "
+     "contract, which is "
      "shown for comparison. Current-year losses are applied before prior-year ones "
      "(s 102-5)."),
     ("Foreign currency (Div 775)", "Non-AUD cash is a right to receive (credit balance) "
@@ -236,6 +237,9 @@ def build_pdf(report: dict) -> bytes:
     el.append(Spacer(1, 4 * mm))
 
     el.append(Paragraph("Headline figures (AUD)", styles["h2"]))
+    lb = s.get("labels") or {}
+    gains_label = f"Total current-year capital gains — {lb.get('gains', 'label 18H')}"
+    net_label = f"NET CAPITAL GAIN — {lb.get('net', 'label 18A')}"
     d2_unknown = ([("    of which: fate after 30 June not in uploaded data (see warnings)",
                     s["d2_outcome_unknown"])]
                   if s.get("d2_outcome_unknown") else [])
@@ -254,15 +258,17 @@ def build_pdf(report: dict) -> bytes:
         ("    of which prior-year net losses — item 2, label C", s["carried_losses_applied"]),
         (f"CGT discount applied ({_rate_label(s['discount_rate'])} of remaining eligible gains)",
          s["discount_applied"]),
-        ("Total current-year capital gains — label 18H", s["total_capital_gains_18H"]),
+        (gains_label, s["total_capital_gains_18H"]),
         ("    for comparison: written options netted against their buy-backs",
          s["total_capital_gains_net_basis"]),
-        ("NET CAPITAL GAIN — label 18A", s["net_capital_gain_18A"]),
-        ("Capital losses carried forward — label 18V", s["losses_carried_forward_18V"]),
+        (net_label, s["net_capital_gain_18A"]),
+        (f"Capital losses carried forward — {lb.get('carried', 'label 18V')}",
+         s["losses_carried_forward_18V"]),
         ("For comparison only: closed-basis (deferred) net", s["deferred_alternative"]),
     ], styles, width=200 * mm,
-        bold_keys=("NET CAPITAL GAIN — label 18A",
-                   "Total current-year capital gains — label 18H")))
+        bold_keys=(net_label, gains_label)))
+    for note in report.get("entity_notes") or []:
+        el.append(Paragraph("• " + escape(note), styles["small"]))
     el.append(Spacer(1, 3 * mm))
 
     oi = s["other_income"]

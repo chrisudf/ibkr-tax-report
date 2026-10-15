@@ -766,6 +766,48 @@ def test_entity_discount_rates(entity, rate):
     assert s["net_capital_gain_18A"] == pytest.approx(gross - gross * rate, abs=0.01)
 
 
+@pytest.mark.parametrize("entity", ["individual", "trust"])
+def test_years_after_the_discount_ends_are_refused_for_individuals_and_trusts(entity):
+    """Act No 49 of 2026: no discount for their CGT events from 1 July 2027, a
+    deemed sale at 30 June 2027 (s 112-155) and indexation — not modelled, so
+    no figure rather than a wrong one."""
+    from engine.cgt import EngineError
+    with pytest.raises(EngineError, match="s 115-100"):
+        run([], fy=2028, period="July 1, 2027 - June 30, 2028", entity=entity)
+
+
+@pytest.mark.parametrize("entity", ["smsf", "company"])
+def test_years_after_the_discount_ends_still_run_for_funds_and_companies(entity):
+    rep = run([], fy=2028, period="July 1, 2027 - June 30, 2028", entity=entity)
+    assert rep["summary"]["discount_rate"] == {"smsf": 1 / 3, "company": 0.0}[entity]
+
+
+def test_the_year_before_the_discount_ends_asks_for_30_june_2027_values():
+    rep = run([], fy=2027, period="July 1, 2026 - June 30, 2027")
+    assert any("30 June 2027" in n and "s 112-155" in n for n in rep["entity_notes"])
+    assert not any("30 June 2027" in n for n in run([], entity="individual")["entity_notes"])
+
+
+def test_return_labels_follow_the_entity():
+    smsf = run([], entity="smsf")
+    assert smsf["summary"]["labels"]["net"] == "SMSF annual return item 11 label A"
+    wp = build_workpaper_csv(smsf)
+    assert "NET CAPITAL GAIN (SMSF annual return item 11 label A)" in wp
+    assert "label 18A" not in wp and "label 18H" not in wp
+    assert "label 18A" in build_workpaper_csv(run([], entity="individual"))
+
+
+def test_entity_notes_say_what_the_figures_leave_out():
+    smsf = " ".join(run([], entity="smsf")["entity_notes"])
+    assert "s 118-320" in smsf and "item 11 label Y" in smsf          # ECPI not applied
+    assert "s 295-85" in smsf and "ATO ID 2009/110" in smsf
+    assert "CGT schedule must be lodged" in smsf
+    company = " ".join(run([], entity="company")["entity_notes"])
+    assert "continuity of ownership test" in company
+    trust = " ".join(run([], entity="trust")["entity_notes"])
+    assert "beneficiaries" in trust
+
+
 def test_losses_applied_to_nondiscountable_first():
     rep = run(list(ENTITY_CASE) + [
         # non-discountable gain (short hold)

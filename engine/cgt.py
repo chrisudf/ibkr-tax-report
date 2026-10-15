@@ -51,6 +51,30 @@ TOOL_VERSION = "0.1.0"
 
 CGT_CATEGORIES = ("Stocks", "Equity and Index Options")
 ENTITY_DISCOUNT = {"individual": 0.5, "trust": 0.5, "smsf": 1.0 / 3.0, "company": 0.0}
+
+# Where each figure goes on each entity's return (ATO CGT schedule 2026
+# instructions; SMSF annual return 2026). The summary keys keep the individual
+# return's names (net_capital_gain_18A, ...) for every entity.
+RETURN_LABELS = {
+    "individual": dict(gains="label 18H", net="label 18A", carried="label 18V",
+                       gains_short="18H", net_short="18A", carried_short="18V"),
+    "smsf": dict(gains="CGT schedule item 1 label J", net="SMSF annual return item 11 label A",
+                 carried="SMSF annual return item 14 label V",
+                 gains_short="CGT sch. 1J", net_short="SAR 11A", carried_short="SAR 14V"),
+    "trust": dict(gains="CGT schedule item 1 label J", net="trust return item 21",
+                  carried="trust return item 27",
+                  gains_short="CGT sch. 1J", net_short="trust item 21",
+                  carried_short="trust item 27"),
+    "company": dict(gains="CGT schedule item 1 label J", net="company return item 7",
+                    carried="company return item 13",
+                    gains_short="CGT sch. 1J", net_short="company item 7",
+                    carried_short="company item 13"),
+}
+# From 1 July 2027 individuals and trusts get no CGT discount (s 115-100(aa),
+# (ab) as amended by Act No 49 of 2026); assets they hold at 30 June 2027 are
+# deemed sold and reacquired at market value (s 112-155), and later growth is
+# indexed (s 110-36(1A)). Not modelled: those years are refused.
+DISCOUNT_ENDS = date(2027, 7, 1)
 QTY_EPS = 1e-9
 
 
@@ -734,6 +758,48 @@ def _rows_after_statement_end(stmt: Statement, fy_end: date) -> list[str]:
     return out
 
 
+def _entity_notes(opts: Options) -> list[str]:
+    """What the figures assume for this entity, and what they leave to the
+    accountant."""
+    notes = []
+    if opts.entity == "individual":
+        notes.append("Figures for an Australian resident individual (no foreign or temporary "
+                     "resident discount limits, ss 115-105, 115-110).")
+    if opts.entity in ("individual", "trust") and opts.fy_end_year == DISCOUNT_ENDS.year:
+        notes.append(
+            "Keep the market value at 30 June 2027 of everything still held then (the Open "
+            "Positions of a statement ending 30 June 2027): from 1 July 2027 the CGT discount "
+            "ends for individuals and trusts, and s 112-155 deems those assets sold and "
+            "reacquired at that value (Act No 49 of 2026).")
+    if opts.entity == "smsf":
+        notes.append(
+            "Assumes the fund is wholly in accumulation phase. Exempt current pension income is "
+            "not applied: gains on segregated current pension assets are disregarded "
+            "(s 118-320), and an unsegregated fund exempts the actuarial proportion (SMSF annual "
+            "return item 11 label Y). A fund with members in retirement phase needs its "
+            "accountant to adjust these figures.")
+        notes.append(
+            "For a complying super fund the CGT rules are the primary code (s 295-85), so gains "
+            "and losses on shares and options are capital; ATO ID 2009/110 and 2009/111 apply "
+            "this to exchange-traded options a fund writes and buys (on their own facts — a "
+            "hedging strategy). Have the fund's accountant confirm for a strategy that writes "
+            "options routinely.")
+    if opts.entity == "company":
+        notes.append(
+            "A company may apply prior-year net capital losses only if it passes the continuity "
+            "of ownership test or the business continuity test (CGT schedule instructions, "
+            "part 2B); the losses entered are applied without checking that.")
+    if opts.entity == "trust":
+        notes.append(
+            "Figures are the trust's net capital gain. How it reaches beneficiaries (streaming, "
+            "grossing up discounted gains, each beneficiary's own discount and losses) and the "
+            "trust loss rules are outside this working paper.")
+    if opts.entity != "individual":
+        notes.append("A CGT schedule must be lodged with the return when total current-year "
+                     "capital gains or capital losses exceed $10,000.")
+    return notes
+
+
 def _d2_outcome_warning(unresolved: list, data_end: date | None, fy_end: date) -> str:
     """Warning for D2 premiums whose post-30-June fate the uploaded data cannot show.
 
@@ -867,6 +933,14 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     if opts.entity not in ENTITY_DISCOUNT:
         raise EngineError(f"unknown entity type {opts.entity!r}")
     discount_rate = ENTITY_DISCOUNT[opts.entity]
+    if opts.entity in ("individual", "trust") and fy_start >= DISCOUNT_ENDS:
+        raise EngineError(
+            f"{fy_label(opts.fy_end_year)} is not supported for {opts.entity}s: from 1 July 2027 "
+            "the 50% CGT discount no longer applies to their CGT events (s 115-100(aa), (ab) "
+            "ITAA 1997, as amended by Act No 49 of 2026). Assets held at 30 June 2027 are "
+            "deemed sold and reacquired at market value then (s 112-155), with that gain still "
+            "discountable when the asset is sold, and later growth is indexed. This tool does "
+            "not model those rules yet, and a figure without them would be wrong.")
 
     # Planned before the renames: a contract that one file names before an option
     # split and another after it must be left for the split to adjust.
@@ -1396,8 +1470,10 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
     current_applied = min(losses_current, gains_disc + gains_nondisc)
     carried_applied = (use_nd + use_d) - current_applied
 
+    entity_notes = _entity_notes(opts)
     summary = dict(
         fy=fy_label(opts.fy_end_year), entity=opts.entity,
+        labels=RETURN_LABELS[opts.entity],
         discount_rate=discount_rate,
         closed_gains_discountable=round(gains_disc, 2),
         closed_gains_nondiscountable=round(tot["gains_nondisc"], 2),
@@ -1454,6 +1530,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
         unmatched=unmatched_rows,
         fx_realisations=fx_real_rows,
         forex_notes=forex_notes,
+        entity_notes=entity_notes,
         amendment_flags=amendment_flags,
         cross_year_notes=prior_written_notes + d2_later_closed + d2_later_assigned
         + exercise_notes,

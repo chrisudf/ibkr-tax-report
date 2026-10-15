@@ -277,11 +277,13 @@ function renderResults(data) {
   $("dl-zip").href = data.downloads.zip;
   showRetention(data);
 
+  // the return items differ by entity: 18A/18H/18V are the individual return's
+  const L = s.labels || { net_short: "18A", gains_short: "18H", carried_short: "18V" };
   const head = $("headline");
   head.innerHTML = "";
   head.append(
-    stat("Net capital gain (18A)", s.net_capital_gain_18A, { hero: true }),
-    stat("Total gains (18H)", s.total_capital_gains_18H),
+    stat(`Net capital gain (${L.net_short})`, s.net_capital_gain_18A, { hero: true }),
+    stat(`Total gains (${L.gains_short})`, s.total_capital_gains_18H),
     stat("Closed parcels net", s.closed_net),
     stat("D2 open written options", s.d2_open_written),
     stat("Losses applied", s.losses_applied_total),
@@ -295,7 +297,7 @@ function renderResults(data) {
   const lbls = $("ato-labels");
   const oi = s.other_income;
   lbls.innerHTML = "";
-  [["Carried forward (18V)", s.losses_carried_forward_18V],
+  [[`Carried forward (${L.carried_short})`, s.losses_carried_forward_18V],
    ["Dividends (gross)", oi.dividends_aud],
    ["Withholding tax", oi.withholding_tax_aud],
    ["Interest (net)", oi.interest_aud],
@@ -325,6 +327,14 @@ function renderResults(data) {
     fxBox.appendChild(ul);
   }
   fxBox.hidden = !oi.forex_method;
+  const en = $("entity-notes");
+  en.innerHTML = "";
+  (data.entity_notes || []).forEach((n) => {
+    const li = document.createElement("li");
+    li.textContent = n;
+    en.appendChild(li);
+  });
+  en.hidden = !(data.entity_notes || []).length;
 
   const warn = data.warnings || [];
   $("warnings-card").hidden = warn.length === 0;

@@ -109,6 +109,7 @@ def build_workpaper_csv(report: dict) -> str:
         _w(w, [k, v])
     _w(w, [])
 
+    lb = s.get("labels") or {}
     _w(w, ["SECTION", "SUMMARY (all amounts AUD)"])
     for k, label in [
         ("closed_gains_discountable", "Closed gains — discount-eligible (held > 12 months)"),
@@ -125,16 +126,20 @@ def build_workpaper_csv(report: dict) -> str:
         ("carried_losses_applied", "  of which prior-year net losses (item 2, label C)"),
         ("losses_applied_total", "Losses applied"),
         ("discount_applied", "CGT discount applied"),
-        ("total_capital_gains_18H", "Total current-year capital gains (label 18H)"),
+        ("total_capital_gains_18H",
+         f"Total current-year capital gains ({lb.get('gains', 'label 18H')})"),
         ("total_capital_gains_net_basis",
-         "  for comparison: 18H with written options netted against their buy-backs"),
-        ("net_capital_gain_18A", "NET CAPITAL GAIN (label 18A)"),
-        ("losses_carried_forward_18V", "Losses carried forward (label 18V)"),
+         "  for comparison: total gains with written options netted against their buy-backs"),
+        ("net_capital_gain_18A", f"NET CAPITAL GAIN ({lb.get('net', 'label 18A')})"),
+        ("losses_carried_forward_18V",
+         f"Losses carried forward ({lb.get('carried', 'label 18V')})"),
     ]:
         _w(w, [label, s[k]])
         if k == "d2_open_written" and s.get("d2_outcome_unknown"):
             _w(w, ["  ... of which: fate after 30 June NOT in uploaded data — may be "
                    "overstated, see WARNINGS", s["d2_outcome_unknown"]])
+    for note in report.get("entity_notes") or []:
+        _w(w, ["NOTE", note])
     oi = s["other_income"]
     _w(w, [])
     _w(w, ["SECTION", "OTHER AMOUNTS (AUD)"])

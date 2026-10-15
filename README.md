@@ -390,7 +390,27 @@ password later.
 - Supports Stocks and Equity/Index Options in the CGT computation. Other asset
   categories (futures, CFDs, bonds, warrants) are excluded with a warning.
 - Assumes capital account (investor). Revenue-account traders need different
-  treatment — the tool takes no position on characterisation.
+  treatment — the tool takes no position on characterisation. For an individual
+  writing options often, whether that is a business is a question of fact with
+  no statutory answer; for a complying SMSF the CGT rules are the primary code
+  (s 295-85), and ATO ID 2009/110 and 2009/111 apply that to options a fund
+  writes and buys.
+- **Individuals and trusts, FY2027-28 onwards: not supported.** From 1 July 2027
+  the 50% discount no longer applies to their CGT events (s 115-100(aa), (ab),
+  as amended by Act No 49 of 2026); assets held at 30 June 2027 are deemed sold
+  and reacquired at market value (s 112-155), and later growth is indexed. The
+  tool refuses those years rather than give a wrong figure. For FY2026-27 it
+  reminds you to keep the 30 June 2027 market values. SMSFs and companies are
+  unaffected.
+- **SMSF**: assumes the fund is wholly in accumulation phase — exempt current
+  pension income (segregated assets, s 118-320, or the actuarial proportion at
+  SMSF annual return item 11 label Y) is not applied.
+- **Company / trust**: a company's prior-year losses are applied without
+  checking the continuity of ownership or business continuity test; a trust's
+  figures are the trust's net capital gain, before anything about its
+  beneficiaries. The report labels each figure with the entity's own return
+  item (18H/18A/18V are the individual return's) and notes when a CGT schedule
+  is required (gains or losses over $10,000 for non-individuals).
 - Checked so far only against real statements from **USD base-currency**
   accounts. AUD base-currency accounts are untested; check the figures closely
   and [report](https://github.com/chrisudf/ibkr-tax-report/issues) anything
