@@ -854,13 +854,23 @@ def test_closed_basis_leaves_out_a_premium_the_basis_does_not_give():
     assert pre["open_cash"] == "" and "left out of the closed-basis comparison" in pre["note"]
 
 
-def test_partly_closed_option_is_listed_once_in_the_possibly_this_year_warning():
-    rows = [trade(OPT, "ABC 19DEC25 50 P", d, 1, -100, -1, basis="250", rpl="149", code="C")
-            for d in ("2025-12-01, 10:00:00", "2025-12-02, 10:00:00")]
+@pytest.mark.parametrize("second_basis,listed", [
+    ("250", "ABC 18DEC26 50 P (USD 500.00)"),
+    ("", "ABC 18DEC26 50 P (USD 250.00, plus premiums still open or not in IBKR's basis)"),
+    (None, "ABC 18DEC26 50 P (USD 250.00, plus premiums still open or not in IBKR's basis)"),
+])
+def test_partly_closed_option_is_listed_once_in_the_possibly_this_year_warning(
+        second_basis, listed):
+    """Two contracts written before the data (which starts 11 November): the
+    second closed with a Basis, closed without one, or still open at 30 June."""
+    days = ["2025-12-01, 10:00:00"] + (["2025-12-02, 10:00:00"] if second_basis is not None
+                                      else [])
+    rows = [trade(OPT, "ABC 18DEC26 50 P", d, 1, -100, -1, basis=b, rpl="149", code="C")
+            for d, b in zip(days, ["250", second_basis])]
     rep = run(rows, period="November 11, 2025 - June 30, 2026",
-              prior_positions=[(OPT, "ABC 19DEC25 50 P", -2)])
+              prior_positions=[(OPT, "ABC 18DEC26 50 P", -2)])
     (w,) = [w for w in rep["warnings"] if "possibly after 2025-07-01" in w]
-    assert w.count("ABC 19DEC25 50 P") == 1 and "ABC 19DEC25 50 P (USD 500.00)" in w
+    assert w.count("ABC 18DEC26 50 P") == 1 and listed in w
 
 
 def test_option_held_before_the_data_under_the_old_ticker_is_renamed():

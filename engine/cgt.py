@@ -805,15 +805,26 @@ def _rows_after_statement_end(stmt: Statement, fy_end: date) -> list[str]:
 
 def _premiums_by_symbol(items: list[tuple]) -> list[str]:
     """(symbol, currency, premium or None) -> one "SYM (USD 1,234.00)" per
-    symbol, the premiums of its partial closes added up."""
+    symbol, the premiums of its partial closes added up; a part whose premium
+    is not known is said to be missing from the amount."""
     known: dict = defaultdict(float)
-    ccys = {}
+    ccys, unknown = {}, set()
     for sym, ccy, premium in items:
         ccys.setdefault(sym, ccy)
-        if premium is not None:
+        if premium is None:
+            unknown.add(sym)
+        else:
             known[sym] += premium
-    return [f"{sym} ({ccys[sym]} {known[sym]:,.2f})" if sym in known else sym
-            for sym in sorted(ccys)]
+    out = []
+    for sym in sorted(ccys):
+        if sym not in known:
+            out.append(sym)
+        elif sym in unknown:
+            out.append(f"{sym} ({ccys[sym]} {known[sym]:,.2f}, plus premiums still open or "
+                       "not in IBKR's basis)")
+        else:
+            out.append(f"{sym} ({ccys[sym]} {known[sym]:,.2f})")
+    return out
 
 
 def _entity_notes(opts: Options) -> list[str]:

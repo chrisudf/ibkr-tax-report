@@ -320,7 +320,8 @@ runs the validated refresh weekly. The report shows the coverage it used
   (s 115-25(3)). Options still open at 30 June are assessable that year
   ("strict" view); a deferred/closed-basis figure, taxing each option in the
   year it is closed (premium included; for an option written before the
-  uploaded data, at the close-date rate), is shown for comparison. Buying a
+  uploaded data, at the close-date rate, and left out where IBKR's basis does
+  not give it), is shown for comparison. Buying a
   written option back is a capital loss equal to the buy-back cost: the
   prevailing view, on which the ATO has published no ruling (a private ruling
   gives certainty).
