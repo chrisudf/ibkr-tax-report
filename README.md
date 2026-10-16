@@ -217,10 +217,12 @@ bundled copy of RBA table F11.1. Its date range is a **hard limit**:
   uploaded data, and the write date of options taxed as D2. Legs outside the
   year count too — a position opened late in file (c) and still held when it
   ends, or a parcel bought years ago, needs a rate as much as a trade in the
-  year does. A leg outside the table stops the whole run with
-  `no RBA USD rate within 10 days on or before <date>`. Rates are never
-  extrapolated; weekends and holidays fall back to the latest published rate
-  within 10 days.
+  year does. A leg outside the table stops the whole run, with
+  `no RBA USD rate for <date>: the rate table ends <last date>` after its end
+  or `no RBA USD rate within 10 days on or before <date>` before its start.
+  Rates are never extrapolated: after the table's last day only the weekend
+  straight after it takes that day's rate; inside the table, weekends and
+  holidays fall back to the latest published rate within 10 days.
 - A file whose period merely ends after the table's last date is fine as long
   as none of those legs do. Keeping the table at least as recent as your latest
   file's end date avoids having to check.
@@ -242,7 +244,7 @@ otherwise it keeps the old table and says why. A plain download also works,
 without those checks:
 `curl -o data/rba_f11.csv https://www.rba.gov.au/statistics/tables/csv/f11.1-data.csv`
 (on Windows PowerShell use `curl.exe`, and `data\rba_f11.csv`). The hosted copy
-runs the validated refresh weekly. The report shows the coverage it used
+runs the validated refresh daily. The report shows the coverage it used
 ("FX source") on every run, and the start page's footer shows it too.
 
 ### Troubleshooting
@@ -369,7 +371,7 @@ runs the validated refresh weekly. The report shows the coverage it used
 
 ```
 app.py            Flask app: local (binds 127.0.0.1) or hosted mode
-rba_refresh.py    validated RBA table refresh (CLI, and the hosted weekly job)
+rba_refresh.py    validated RBA table refresh (CLI, and the hosted daily job)
 setup.sh          one-shot environment setup (macOS / Linux)
 setup.ps1         one-shot environment setup (Windows)
 cli.py            command-line runner

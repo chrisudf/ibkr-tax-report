@@ -271,8 +271,8 @@ def _rba_loop(stop: threading.Event, interval: float) -> None:
         except Exception:
             log.exception("RBA refresh crashed")
             outcome = None
-        # a network failure is worth retrying sooner than a week; a rejected
-        # file will most likely still be rejected tomorrow
+        # a network failure is worth retrying before the next scheduled run; a
+        # rejected file will most likely still be rejected next time
         delay = interval if outcome and outcome.status != "failed" else min(interval, 6 * 3600)
 
 
