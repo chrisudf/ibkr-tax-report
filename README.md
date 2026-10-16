@@ -98,11 +98,21 @@ withholding tax, interest, fees, deposits and withdrawals.
 Every realisation is listed in the report's Div 775 schedule (CSV, PDF and
 ZIP), with the AUD value, the FIFO cost and the dates the units were acquired.
 
-If you still hold parcels bought before the reported year, also upload the
-earlier years' activity statements: they supply the FIFO history (the
-acquisition date and cost of each parcel). Overlapping periods are
-de-duplicated row by row. One IBKR account per run — files from different
-accounts are refused.
+If you still hold parcels bought before the reported year, or had written
+options still open at the start of it, also upload the earlier years'
+activity statements: they supply the FIFO history (the acquisition date and
+cost of each parcel, the write date and premium of each option). Overlapping
+periods are de-duplicated row by row. One IBKR account per run — files from
+different accounts are refused.
+
+Without that history the tool still knows what was open when the data starts,
+from the statement's Mark-to-Market Performance Summary, and closes those
+positions first. Their opening cash comes from IBKR's cost basis on each
+closing trade, but their dates do not. So shares and bought options are
+translated at the sale-date rate with no CGT discount. Written options are
+treated as written in an earlier year (only the buy-back counts, an expiry
+counts nothing). An assignment is flagged for amending the year the option was
+written, without an amount. The report warns, listing the positions.
 
 Every date in every file must fall inside the bundled RBA rate table, or the
 run stops — see [RBA exchange rates](#rba-exchange-rates-datarba_f11csv).
@@ -207,10 +217,12 @@ bundled copy of RBA table F11.1. Its date range is a **hard limit**:
   uploaded data, and the write date of options taxed as D2. Legs outside the
   year count too — a position opened late in file (c) and still held when it
   ends, or a parcel bought years ago, needs a rate as much as a trade in the
-  year does. A leg outside the table stops the whole run with
-  `no RBA USD rate within 10 days on or before <date>`. Rates are never
-  extrapolated; weekends and holidays fall back to the latest published rate
-  within 10 days.
+  year does. A leg outside the table stops the whole run, with
+  `no RBA USD rate for <date>: the rate table ends <last date>` after its end
+  or `no RBA USD rate within 10 days on or before <date>` before its start.
+  Rates are never extrapolated: after the table's last day only the weekend
+  straight after it takes that day's rate; inside the table, weekends and
+  holidays fall back to the latest published rate within 10 days.
 - A file whose period merely ends after the table's last date is fine as long
   as none of those legs do. Keeping the table at least as recent as your latest
   file's end date avoids having to check.
@@ -232,7 +244,7 @@ otherwise it keeps the old table and says why. A plain download also works,
 without those checks:
 `curl -o data/rba_f11.csv https://www.rba.gov.au/statistics/tables/csv/f11.1-data.csv`
 (on Windows PowerShell use `curl.exe`, and `data\rba_f11.csv`). The hosted copy
-runs the validated refresh weekly. The report shows the coverage it used
+runs the validated refresh daily. The report shows the coverage it used
 ("FX source") on every run, and the start page's footer shows it too.
 
 ### Troubleshooting
@@ -246,6 +258,12 @@ runs the validated refresh weekly. The report shows the coverage it used
   exercise later means amending the return.
 - **"no 'Forex P/L Details' section was found"** warning (AUD base-currency
   accounts only). Add file (b).
+- **"GAP IN THE UPLOADED DATA"** or **"POSITIONS DO NOT ADD UP"** warning. Trades
+  are missing between the files (for example a year left out), so a later sale
+  can be matched against a parcel that was already sold in the missing period.
+  The second check compares each statement's opening positions (IBKR's
+  Mark-to-Market summary) with what the earlier data adds up to. Upload the
+  missing statement.
 - **"DIV 775 MAY BE INCOMPLETE"** warning. A statement's cash flows do not add up
   to its Cash Report by more than 10 units: some cash movement is not in the
   sections the tool reads (for example cash from a corporate action, or a
@@ -274,6 +292,21 @@ runs the validated refresh weekly. The report shows the coverage it used
 - Every leg translated at the **RBA daily rate for its own date** (s 960-50
   ITAA 1997): cost base at the acquisition-date rate, capital proceeds at the
   CGT-event-date rate.
+- **Dates are IBKR's, in Sydney time** (AEST/AEDT), as the CSV gives them:
+  most US trades carry the next calendar day. IBKR's statement day ends at
+  10:00 Sydney, so a statement "to 30 June" can hold rows dated 1 July — counted
+  in the year of their date and listed in a warning, because next year's
+  statement may not repeat them. The ATO sets no rule on the time zone; the
+  Acts Interpretation Act 1901 s 37 points to the legal time of the
+  taxpayer's State, which differs from Sydney time in Queensland, WA, SA and
+  the NT. Whichever convention is used, keep it for the whole return and from
+  year to year. Income counts when IBKR credits it: June's
+  interest, credited in July, falls in the next year (a fund keeping accruals
+  accounts may bring it back — the accountant's choice).
+- **Withholding**: foreign tax withheld is the foreign income tax offset
+  candidate, less any US withholding above the 15% treaty rate: that excess is
+  shown separately (reclaim it from the IRS; it is not part of the offset), as
+  is any tax withheld in AUD, which is Australian tax, not foreign.
 - **Financial year defaults to the latest one that has ended** and that the
   uploaded data covers — not the year the statement happens to end in.
   Statements are pulled after 30 June, so keying off the end date alone lands
@@ -287,15 +320,37 @@ runs the validated refresh weekly. The report shows the coverage it used
   warning, never silently added.
 - **Written options: CGT event D2 at grant** (s 104-40(2)), never discountable
   (s 115-25(3)). Options still open at 30 June are assessable that year
-  ("strict" view); a deferred/closed-basis figure is shown for comparison.
+  ("strict" view); a deferred/closed-basis figure, taxing each option in the
+  year it is closed (premium included; for an option written before the
+  uploaded data, at the close-date rate, and left out where IBKR's basis does
+  not give it), is shown for comparison. Buying a
+  written option back is a capital loss equal to the buy-back cost: the
+  prevailing view, on which the ATO has published no ruling (a private ruling
+  gives certainty).
   When the uploaded data stops before such an option's fate is known, the
   strict figure stands and a warning lists the contracts and amounts.
 - **Assignment/exercise**: D2 disregarded (s 104-40(5)); premium folded into
   the share parcel (ss 134-1 / 116-65). Assignments cancelling a prior-year D2
-  gain raise an **amendment flag** (s 170(10) ITAA 1936: unlimited period).
+  gain raise an **amendment flag** (no time limit: s 170(10AA) item 50 ITAA 1936).
+  The flag says the amendment is needed only if that return counted the gain —
+  not if it was prepared after the assignment with a statement showing it. The
+  folded premium is translated at the rate on the day the option was written.
 - Purchased options expiring worthless: capital loss at expiry (C2, s 104-25).
 - 12-month CGT discount by entity (individual/trust 50%, complying SMSF 33⅓%,
-  company nil), losses applied against non-discountable gains first.
+  company nil), losses applied against non-discountable gains first. Leaving
+  out the day of acquisition and the day of the event (the ATO's approach), the
+  12 months are counted as months under the Acts Interpretation Act 1901 s 2G:
+  bought 28 February 2023, the first discountable day is 1 March 2024. The
+  workpaper's `discount_from` column
+  gives the first day a parcel's sale is discountable, since a day count can
+  mislead (365 days is not always 12 months).
+- **Each CGT event counts on its own** in total gains (18H) and losses. An
+  option written and bought back in the same year is a D2 gain (the premium)
+  plus a separate capital loss (the buy-back), as when the two fall in
+  different years. 18A is the same as with one net figure per contract, which
+  the workpaper shows for comparison. Current-year losses are applied before
+  prior-year ones (s 102-5), and the split is shown (for entities that lodge
+  a CGT schedule, as item 2 labels B and C).
 - Corporate actions (splits, incl. option contract renames) parsed from the
   statement's Corporate Actions section; anything unrecognised becomes a
   warning, never a silent guess. Ticker changes are unified via IBKR conids.
@@ -303,12 +358,12 @@ runs the validated refresh weekly. The report shows the coverage it used
   periods are safe); consecutive years give exact FIFO history. Closing trades
   with no visible opening lot fall back to IBKR's Realized P/L with loud
   warnings.
-- Other amounts: dividends, withholding tax (FITO), interest (IBKR nets borrow
-  fees into it — the borrow-fee detail is informational only), account fees,
-  and realised FX gains/losses (Div 775 ordinary income, not CGT). For a
-  non-AUD base account Div 775 is worked out FIFO from the cash flows; for an
-  AUD base account it comes from file (b) — see
-  [Foreign currency](#foreign-currency-div-775).
+- Other amounts: dividends, foreign tax withheld (FITO candidate, less any US
+  excess over the treaty rate), interest (IBKR nets borrow fees into it — the
+  borrow-fee detail is informational only), account fees, and realised FX
+  gains/losses (Div 775 ordinary income, not CGT). For a non-AUD base account
+  Div 775 is worked out FIFO from the cash flows; for an AUD base account it
+  comes from file (b) — see [Foreign currency](#foreign-currency-div-775).
 - Reconciliation: per-row vs IBKR Realized P/L, year-end parcels vs the Open
   Positions snapshot, with expected differences (premium folds) auto-annotated.
 
@@ -316,7 +371,7 @@ runs the validated refresh weekly. The report shows the coverage it used
 
 ```
 app.py            Flask app: local (binds 127.0.0.1) or hosted mode
-rba_refresh.py    validated RBA table refresh (CLI, and the hosted weekly job)
+rba_refresh.py    validated RBA table refresh (CLI, and the hosted daily job)
 setup.sh          one-shot environment setup (macOS / Linux)
 setup.ps1         one-shot environment setup (Windows)
 cli.py            command-line runner
@@ -348,7 +403,29 @@ password later.
 - Supports Stocks and Equity/Index Options in the CGT computation. Other asset
   categories (futures, CFDs, bonds, warrants) are excluded with a warning.
 - Assumes capital account (investor). Revenue-account traders need different
-  treatment — the tool takes no position on characterisation.
+  treatment — the tool takes no position on characterisation. For an individual
+  writing options often, whether that is a business is a question of fact with
+  no statutory answer; for a complying SMSF the CGT rules are the primary code
+  (s 295-85), and ATO ID 2009/110 and 2009/111 apply that to options a fund
+  writes and buys.
+- **Individuals and trusts, FY2027-28 onwards: not supported.** From 1 July 2027
+  the 50% discount no longer applies to their CGT events (s 115-100(aa), (ab),
+  as amended by Act No 49 of 2026); assets held at 30 June 2027 are deemed sold
+  and reacquired at market value, or by choice an amount apportioned under
+  s 112-185 (individuals s 112-155; trusts s 112-165, if a beneficiary would
+  get the discount), and later growth is indexed. The
+  tool refuses those years rather than give a wrong figure. For FY2026-27 it
+  reminds you to keep the 30 June 2027 market values. SMSFs and companies are
+  unaffected.
+- **SMSF**: assumes the fund is wholly in accumulation phase — exempt current
+  pension income (segregated assets, s 118-320, or the actuarial proportion at
+  SMSF annual return item 11 label Y) is not applied.
+- **Company / trust**: a company's prior-year losses are applied without
+  checking the continuity of ownership or business continuity test; a trust's
+  figures are the trust's net capital gain, before anything about its
+  beneficiaries. The report labels each figure with the entity's own return
+  item (18H/18A/18V are the individual return's) and notes when a CGT schedule
+  is required (gains or losses over $10,000 for non-individuals).
 - Checked so far only against real statements from **USD base-currency**
   accounts. AUD base-currency accounts are untested; check the figures closely
   and [report](https://github.com/chrisudf/ibkr-tax-report/issues) anything

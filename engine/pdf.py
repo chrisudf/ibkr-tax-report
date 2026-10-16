@@ -141,25 +141,47 @@ METHOD_POINTS = [
     ("Translation", "Every leg is translated to AUD at the RBA daily rate for its own "
      "transaction date (s 960-50 ITAA 1997): cost base at acquisition-date rate, capital "
      "proceeds at CGT-event-date rate. Weekend/holiday dates fall back to the most recent "
-     "prior published rate."),
+     "prior published rate; a date after the end of the rate table stops the run."),
+    ("Dates", "Dates are those of IBKR's CSV, in Sydney time (AEST/AEDT): most US trades "
+     "carry the next calendar day. IBKR's statement day ends at 10:00 Sydney, so a statement "
+     "ending 30 June can hold rows dated 1 July; they are counted in the year of their date "
+     "and listed in a warning. The ATO gives no rule on which time zone to use. The Acts "
+     "Interpretation Act 1901 s 37 points to the legal time of the taxpayer's State, which "
+     "differs from Sydney time in Queensland, WA, SA and the NT. Whichever convention is "
+     "used, keep it for the whole return and from year to year."),
     ("Lot matching", "First-in-first-out per symbol, matching IBKR's default. Realised "
      "gain per parcel = opening cashflow + closing cashflow (both signed, inclusive of "
      "commissions), valid for long and short parcels."),
     ("Written options", "CGT event D2 at the date of grant (s 104-40(2)). Premiums on "
      "written options still open at 30 June are assessable in this year; the discount "
-     "never applies to D2 gains (s 115-25(3)). A deferred/closed-basis alternative is "
-     "shown for comparison only."),
+     "never applies to D2 gains (s 115-25(3)). Buying one back is a capital loss equal "
+     "to the buy-back cost — the prevailing view, on which the ATO has published no "
+     "ruling (a private ruling gives certainty). A deferred/closed-basis alternative, "
+     "taxing each option in the year it is closed, is shown for comparison only (an "
+     "option written before the uploaded data takes its premium at the close-date rate, "
+     "or leaves it out where IBKR's basis does not give it)."),
     ("Assignment / exercise", "The D2 gain is disregarded when a written option is "
      "exercised or assigned (s 104-40(5)); the premium is instead folded into the share "
      "parcel — reducing cost base of shares acquired under a put (s 134-1) or increasing "
      "capital proceeds of shares delivered under a call (s 116-65). Assignments that "
      "cancel a D2 gain returned in an earlier year are flagged for amendment "
-     "(unlimited amendment period: s 170(10) ITAA 1936)."),
+     "(no time limit for that amendment: s 170(10AA) item 50 ITAA 1936). The premium "
+     "is translated at the rate on the day the option was written."),
     ("Expiries", "Purchased options expiring worthless are a capital loss at expiry "
      "(CGT event C2, s 104-25)."),
     ("Discount", "Applied only to long parcels acquired at least 12 months before the "
      "CGT event (s 115-25(1)) at the entity's statutory rate, after applying losses "
-     "against non-discountable gains first."),
+     "against non-discountable gains first. Leaving out the acquisition day and the event "
+     "day (the ATO's approach), the 12 months are counted as months under the Acts "
+     "Interpretation Act 1901 s 2G: bought 28 February 2023, the first discountable day "
+     "is 1 March 2024."),
+    ("Gains and losses", "Each CGT event is counted on its own in total gains and "
+     "losses: an option written and bought back in the same year is a D2 gain (the "
+     "premium) and a separate capital loss (the buy-back), as when the two fall in "
+     "different years. The net capital gain is the same as with one net figure per "
+     "contract, which is "
+     "shown for comparison. Current-year losses are applied before prior-year ones "
+     "(s 102-5)."),
     ("Foreign currency (Div 775)", "Non-AUD cash is a right to receive (credit balance) "
      "or an obligation to pay (debit balance) foreign currency. Spending, converting or "
      "withdrawing it is forex realisation event 2 (s 775-45); paying back a debit balance "
@@ -222,6 +244,9 @@ def build_pdf(report: dict) -> bytes:
     el.append(Spacer(1, 4 * mm))
 
     el.append(Paragraph("Headline figures (AUD)", styles["h2"]))
+    lb = s.get("labels") or {}
+    gains_label = f"Total current-year capital gains — {lb.get('gains', 'label 18H')}"
+    net_label = f"NET CAPITAL GAIN — {lb.get('net', 'label 18A')}"
     d2_unknown = ([("    of which: fate after 30 June not in uploaded data (see warnings)",
                     s["d2_outcome_unknown"])]
                   if s.get("d2_outcome_unknown") else [])
@@ -235,22 +260,37 @@ def build_pdf(report: dict) -> bytes:
         ("Current-year gains subtotal — strict ATO view", s["strict_subtotal"]),
         ("Prior-year losses carried in", s["carried_losses_input"]),
         ("Losses applied (non-discountable gains first)", s["losses_applied_total"]),
+        ("    of which " + lb.get("losses_current", "current-year losses"),
+         s["current_year_losses_applied"]),
+        ("    of which " + lb.get("losses_prior", "prior-year net losses"),
+         s["carried_losses_applied"]),
         (f"CGT discount applied ({_rate_label(s['discount_rate'])} of remaining eligible gains)",
          s["discount_applied"]),
-        ("Total current-year capital gains — label 18H", s["total_capital_gains_18H"]),
-        ("NET CAPITAL GAIN — label 18A", s["net_capital_gain_18A"]),
-        ("Capital losses carried forward — label 18V", s["losses_carried_forward_18V"]),
+        (gains_label, s["total_capital_gains_18H"]),
+        ("    for comparison: written options netted against their buy-backs",
+         s["total_capital_gains_net_basis"]),
+        (net_label, s["net_capital_gain_18A"]),
+        (f"Capital losses carried forward — {lb.get('carried', 'label 18V')}",
+         s["losses_carried_forward_18V"]),
         ("For comparison only: closed-basis (deferred) net", s["deferred_alternative"]),
     ], styles, width=200 * mm,
-        bold_keys=("NET CAPITAL GAIN — label 18A",
-                   "Total current-year capital gains — label 18H")))
+        bold_keys=(net_label, gains_label)))
+    for note in report.get("entity_notes") or []:
+        el.append(Paragraph("• " + escape(note), styles["small"]))
     el.append(Spacer(1, 3 * mm))
 
     oi = s["other_income"]
     el.append(Paragraph("Other amounts (AUD)", styles["h2"]))
     el.append(_kv_table([
         ("Dividends, gross (foreign income)", oi["dividends_aud"]),
-        ("Foreign withholding tax (FITO candidate)", oi["withholding_tax_aud"]),
+        *([("Foreign tax withheld", oi["withholding_tax_aud"]),
+            ("    of which above the 15% US treaty rate — reclaim from the IRS, not FITO",
+             -oi["withholding_above_treaty_aud"]),
+            ("Foreign tax withheld less that excess (FITO candidate)",
+             oi["fito_candidate_aud"])] if oi.get("withholding_above_treaty_aud")
+          else [("Foreign tax withheld (FITO candidate)", oi["withholding_tax_aud"])]),
+        *([("Australian tax withheld in AUD (not FITO)", oi["australian_withholding_aud"])]
+          if oi.get("australian_withholding_aud") else []),
         ("Interest, net (IBKR nets borrow fees into this figure)", oi["interest_aud"]),
         ("Account fees (review deductibility)", oi["fees_aud"]),
         ("Realised FX gain/loss — ordinary income, Div 775 (not CGT)", oi["forex_pl_aud"]),
@@ -289,6 +329,8 @@ def build_pdf(report: dict) -> bytes:
         rows = report.get(key) or []
         if not rows and key in ("transfers", "unmatched", "fx_realisations"):
             continue
+        # the landscape page has no room for it; the CSV keeps it
+        cols = [c for c in cols if c != "discount_from"]
         el.append(PageBreak())
         el.append(Paragraph(f"{title} — {len(rows)} rows", styles["h2"]))
         if rows:

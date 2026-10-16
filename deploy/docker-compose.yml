@@ -29,7 +29,7 @@ services:
       IBKR_TAX_RATE_LIMIT: "10/60,60/3600"
       IBKR_TAX_PROXY_HOPS: "1"            # exactly one proxy (Caddy) in front
       IBKR_TAX_RBA_DIR: /rba
-      IBKR_TAX_RBA_REFRESH_HOURS: "168"   # weekly
+      IBKR_TAX_RBA_REFRESH_HOURS: "24"    # daily: no rate past the table's end
       TZ: Australia/Sydney
     read_only: true
     tmpfs:

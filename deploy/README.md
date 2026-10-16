@@ -35,7 +35,7 @@ All set in `docker-compose.yml`:
   log rotation (3 × 1 MB).
 - App settings (see the top of `app.py`): hosted page text, results kept 15
   minutes, 10 MB upload limit, 10 reports/minute and 60/hour per client IP,
-  client IP from `X-Forwarded-For` with exactly one proxy hop (Caddy), weekly
+  client IP from `X-Forwarded-For` with exactly one proxy hop (Caddy), daily
   RBA refresh.
 
 Caddy does not log requests for this site (no `log` directive), and gunicorn
@@ -156,7 +156,7 @@ credentials with every request, including the JavaScript `fetch` calls.
 The image contains `data/rba_f11.csv` as of its build. The app refreshes it
 in place, without a restart:
 
-- 60 seconds after start, then every 168 hours
+- 60 seconds after start, then every 24 hours
   (`IBKR_TAX_RBA_REFRESH_HOURS`), it downloads
   `https://www.rba.gov.au/statistics/tables/csv/f11.1-data.csv`.
 - The download replaces the table in use only if it parses, starts no later
@@ -166,7 +166,9 @@ in place, without a restart:
   that.
 - If it fails validation, the table in use stays and the reason is logged
   (`RBA refresh rejected: ...`). A network failure is retried after 6 hours
-  instead of a week.
+  instead of a day. Daily, because a leg dated after the table's last day
+  (other than the weekend straight after it) stops a run: a user uploading a
+  statement that ended yesterday needs yesterday's rates.
 - `/healthz` shows `rba.last` (last date covered), `rba.source` and
   `rba.last_outcome`.
 

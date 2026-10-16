@@ -16,7 +16,7 @@ import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 
 class ParseError(Exception):
@@ -93,6 +93,19 @@ class CashReport:
 
 
 @dataclass
+class PositionSnapshot:
+    """Positions held when one statement's period starts ("Prior Quantity" in
+    its Mark-to-Market Performance Summary), keyed by (asset category, symbol).
+    The earliest one tells the engine what was already held before the data."""
+    source_name: str
+    as_of: date | None
+    qty: dict[tuple[str, str], float]
+    # The statement it came from, before merging: its own trades are the ones
+    # the opening quantities do not include yet.
+    owner: "Statement | None" = field(default=None, repr=False, compare=False)
+
+
+@dataclass
 class Statement:
     source_name: str
     title: str = ""
@@ -114,6 +127,7 @@ class Statement:
     forex_pl: list[CashItem] = field(default_factory=list)   # IBKR's FX P/L, in base currency
     deposits: list[CashItem] = field(default_factory=list)   # deposits (+) / withdrawals (-)
     cash_reports: list[CashReport] = field(default_factory=list)
+    position_snapshots: list[PositionSnapshot] = field(default_factory=list)
     conid_symbols: dict[str, list[str]] = field(default_factory=dict)  # conid -> symbols seen
     conid_current: dict[str, str] = field(default_factory=dict)        # conid -> current symbol
     code_legend: dict[str, str] = field(default_factory=dict)
@@ -265,6 +279,7 @@ def _parse_rows(reader, source_name: str) -> Statement:
     sections: dict[str, _Section] = {}
     saw_statement_section = False
     cash_balances: dict[str, dict[str, float]] = {"Starting Cash": {}, "Ending Cash": {}}
+    saw_mtm, prior_qty = False, {}
 
     for row in reader:
         if len(row) < 2:
@@ -273,6 +288,8 @@ def _parse_rows(reader, source_name: str) -> Statement:
         sec = sections.setdefault(sec_name, _Section())
         if row_type == "Header":
             sec.set_header(row)
+            # present even when nothing was held: then every prior quantity is 0
+            saw_mtm = saw_mtm or sec_name == "Mark-to-Market Performance Summary"
             continue
         if row_type != "Data":
             continue  # SubTotal / Total / Notes
@@ -388,6 +405,17 @@ def _parse_rows(reader, source_name: str) -> Statement:
                     cur != "Base Currency Summary":
                 cash_balances[label][cur] = _num(sec.get(row, "Total"))
 
+        elif sec_name == "Mark-to-Market Performance Summary":
+            cat, sym = sec.get(row, "Asset Category"), sec.get(row, "Symbol").strip()
+            if cat in ("", "Total") or not sym or sym.startswith("Total"):
+                continue
+            try:
+                prior = _num(sec.get(row, "Prior Quantity"))
+            except (ValueError, ParseError):
+                continue   # "--" on summary lines
+            if prior:
+                prior_qty[(cat, occ_to_display(sym))] = prior
+
         elif sec_name == "Borrow Fee Details":
             cur = sec.get(row, "Currency")
             ds = sec.get(row, "Value Date").strip()
@@ -447,6 +475,9 @@ def _parse_rows(reader, source_name: str) -> Statement:
         stmt.cash_reports.append(CashReport(
             source_name, stmt.period_start, stmt.period_end,
             dict(cash_balances["Starting Cash"]), dict(cash_balances["Ending Cash"]), stmt))
+    if saw_mtm:
+        stmt.position_snapshots.append(PositionSnapshot(source_name, stmt.period_start,
+                                                        prior_qty, stmt))
     stmt.trades.sort(key=lambda t: t.dt)  # csv.reader preserves file order for ties
     return stmt
 
@@ -512,13 +543,26 @@ def merge_statements(stmts: list[Statement]) -> Statement:
         setattr(out, attr, sorted(dedupe(ci_key, [getattr(s, attr) for s in stmts]),
                                   key=lambda x: x.d))
     out.cash_reports = [r for s in stmts for r in s.cash_reports]   # stmts sorted by period
+    out.position_snapshots = [p for s in stmts for p in s.position_snapshots]
 
     # Overlap sanity note
     periods = [(s.period_start, s.period_end, s.source_name) for s in stmts
                if s.period_start and s.period_end]
+    covered_to, covered_by = (periods[0][1], periods[0][2]) if periods else (None, None)
     for i in range(1, len(periods)):
-        if periods[i][0] <= periods[i - 1][1]:
+        start, end, name = periods[i]
+        if start <= periods[i - 1][1]:
             out.warnings.append(
-                f"overlapping statement periods: {periods[i-1][2]} and {periods[i][2]} — "
+                f"overlapping statement periods: {periods[i-1][2]} and {name} — "
                 "duplicate rows were de-duplicated automatically.")
+        elif start > covered_to + timedelta(days=1):
+            # Trades in the gap are missing: FIFO would match later sales against
+            # parcels that may already have been sold in it.
+            out.warnings.append(
+                f"GAP IN THE UPLOADED DATA — nothing covers {covered_to + timedelta(days=1)} to "
+                f"{start - timedelta(days=1)} (between {covered_by} and {name}). Trades in "
+                "that period are missing, so parcels sold in it may be matched again later. "
+                "Upload the statement covering it.")
+        if end > covered_to:
+            covered_to, covered_by = end, name
     return out

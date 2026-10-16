@@ -31,9 +31,12 @@ def trade(cat, sym, dt, qty, proceeds, comm, basis="", rpl="", code=""):
 
 def statement(period, when, trades, open_positions=(), corporate_actions=(),
               dividends=(), wht=(), interest=(), fees=(), instrument_info=(),
-              deposits=(), cash_start=None):
+              deposits=(), cash_start=None, prior_positions=None):
     """One statement as CSV text. With `cash_start` (currency -> starting cash)
-    a Cash Report is added whose ending cash is worked out from the rows."""
+    a Cash Report is added whose ending cash is worked out from the rows. With
+    `prior_positions` ((category, symbol, quantity) held when the period starts)
+    a Mark-to-Market Performance Summary is added, as in every real Activity
+    Statement."""
     rows = [
         ["Statement", "Header", "Field Name", "Field Value"],
         ["Statement", "Data", "BrokerName", "Interactive Brokers Australia Pty Ltd. (DEMO)"],
@@ -65,6 +68,15 @@ def statement(period, when, trades, open_positions=(), corporate_actions=(),
         rows.append(["Fees", "Header", "Subtitle", "Currency", "Date", "Description",
                      "Amount"])
         rows.extend(fees)
+    if prior_positions is not None:
+        rows.append(["Mark-to-Market Performance Summary", "Header", "Asset Category",
+                     "Symbol", "Prior Quantity", "Current Quantity", "Prior Price",
+                     "Current Price", "Mark-to-Market P/L Position",
+                     "Mark-to-Market P/L Transaction", "Mark-to-Market P/L Commissions",
+                     "Mark-to-Market P/L Other", "Mark-to-Market P/L Total", "Code"])
+        for cat, sym, qty in prior_positions:
+            rows.append(["Mark-to-Market Performance Summary", "Data", cat, sym, qty, "",
+                         "", "", "", "", "", "", "", ""])
     if deposits:
         rows.append(["Deposits & Withdrawals", "Header", "Currency", "Settle Date",
                      "Description", "Amount"])

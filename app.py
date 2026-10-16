@@ -271,8 +271,8 @@ def _rba_loop(stop: threading.Event, interval: float) -> None:
         except Exception:
             log.exception("RBA refresh crashed")
             outcome = None
-        # a network failure is worth retrying sooner than a week; a rejected
-        # file will most likely still be rejected tomorrow
+        # a network failure is worth retrying before the next scheduled run; a
+        # rejected file will most likely still be rejected next time
         delay = interval if outcome and outcome.status != "failed" else min(interval, 6 * 3600)
 
 
@@ -510,6 +510,7 @@ def _report_response(uploads: list[tuple[str, bytes]], form, demo: bool = False)
             fx_realisations=preview(report["fx_realisations"]),
         ),
         forex_notes=report["forex_notes"],
+        entity_notes=report["entity_notes"],
         downloads=dict(
             csv=f"/api/download/{token}/csv",
             pdf=f"/api/download/{token}/pdf",

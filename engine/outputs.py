@@ -36,7 +36,8 @@ def _is_numberish(s: str) -> bool:
 TABLES = {
     "closed_lots": (
         ["category", "symbol", "currency", "qty", "open_date", "close_date", "days_held",
-         "open_cash", "close_cash", "open_fx", "close_fx", "gain_native", "gain_aud",
+         "discount_from", "open_cash", "close_cash", "open_fx", "close_fx", "gain_native",
+         "gain_aud",
          "short", "expiry", "discount_eligible", "note"],
         "Closed parcels — CGT events realised in the financial year (FIFO matched)"),
     "d2_open": (
@@ -52,7 +53,8 @@ TABLES = {
     "carry_forward": (
         ["category", "symbol", "qty", "acquired", "cost_native", "currency", "fx",
          "cost_aud"],
-        "Open parcels carried forward — cost base locked at acquisition-date RBA rate"),
+        "Open parcels held at the end of the financial year (30 June), carried forward — "
+        "cost base locked at acquisition-date RBA rate"),
     "unmatched": (
         ["category", "symbol", "currency", "close_date", "qty", "close_cash",
          "ib_realized_pl", "gain_aud", "note"],
@@ -68,7 +70,10 @@ TABLES = {
 
 OTHER_INCOME_TABLES = {
     "dividends": "Dividends (gross)",
-    "withholding_tax": "Withholding tax (foreign income tax offset)",
+    "withholding_tax": "Foreign tax withheld (the FITO candidate in the summary leaves "
+                       "out any US withholding above the 15% treaty rate)",
+    "australian_withholding": "Australian tax withheld in AUD (NOT a foreign income tax "
+                              "offset)",
     "interest": "Interest (IBKR nets borrow fees into this section — do not deduct "
                 "Borrow Fee Details again)",
     "fees": "Account fees (possible deduction — verify nature)",
@@ -105,6 +110,7 @@ def build_workpaper_csv(report: dict) -> str:
         _w(w, [k, v])
     _w(w, [])
 
+    lb = s.get("labels") or {}
     _w(w, ["SECTION", "SUMMARY (all amounts AUD)"])
     for k, label in [
         ("closed_gains_discountable", "Closed gains — discount-eligible (held > 12 months)"),
@@ -113,24 +119,44 @@ def build_workpaper_csv(report: dict) -> str:
         ("closed_net", "Closed parcels net"),
         ("d2_open_written", "D2: written options open at 30 June (premiums at grant date)"),
         ("strict_subtotal", "Current-year gains subtotal (strict ATO view)"),
-        ("deferred_alternative", "Alternative: closed-basis only (deferred view, for comparison)"),
+        ("deferred_alternative", "Alternative: closed-basis only (deferred view, for "
+                                 "comparison) — options taxed in the year closed, premium "
+                                 "included"),
         ("current_year_losses", "Current-year capital losses (component)"),
         ("carried_losses_input", "Prior-year losses carried in (user input)"),
         ("losses_applied_total", "Losses applied"),
+        ("current_year_losses_applied",
+         f"  of which {lb.get('losses_current', 'current-year losses')}"),
+        ("carried_losses_applied", f"  of which {lb.get('losses_prior', 'prior-year net losses')}"),
         ("discount_applied", "CGT discount applied"),
-        ("total_capital_gains_18H", "Total current-year capital gains (label 18H)"),
-        ("net_capital_gain_18A", "NET CAPITAL GAIN (label 18A)"),
-        ("losses_carried_forward_18V", "Losses carried forward (label 18V)"),
+        ("total_capital_gains_18H",
+         f"Total current-year capital gains ({lb.get('gains', 'label 18H')})"),
+        ("total_capital_gains_net_basis",
+         "  for comparison: total gains with written options netted against their buy-backs"),
+        ("net_capital_gain_18A", f"NET CAPITAL GAIN ({lb.get('net', 'label 18A')})"),
+        ("losses_carried_forward_18V",
+         f"Losses carried forward ({lb.get('carried', 'label 18V')})"),
     ]:
         _w(w, [label, s[k]])
         if k == "d2_open_written" and s.get("d2_outcome_unknown"):
             _w(w, ["  ... of which: fate after 30 June NOT in uploaded data — may be "
                    "overstated, see WARNINGS", s["d2_outcome_unknown"]])
+    for note in report.get("entity_notes") or []:
+        _w(w, ["NOTE", note])
     oi = s["other_income"]
     _w(w, [])
     _w(w, ["SECTION", "OTHER AMOUNTS (AUD)"])
     _w(w, ["Dividends (gross) — foreign income", oi["dividends_aud"]])
-    _w(w, ["Withholding tax (FITO)", oi["withholding_tax_aud"]])
+    if oi.get("withholding_above_treaty_aud"):
+        _w(w, ["Foreign tax withheld", oi["withholding_tax_aud"]])
+        _w(w, ["  of which above the 15% US treaty rate (reclaim from the IRS, not FITO)",
+               -oi["withholding_above_treaty_aud"]])
+        _w(w, ["Foreign tax withheld less that excess (FITO candidate)",
+               oi["fito_candidate_aud"]])
+    else:
+        _w(w, ["Foreign tax withheld (FITO candidate)", oi["withholding_tax_aud"]])
+    if oi.get("australian_withholding_aud"):
+        _w(w, ["Australian tax withheld (not FITO)", oi["australian_withholding_aud"]])
     _w(w, ["Interest (net; IBKR includes borrow fees here)", oi["interest_aud"]])
     _w(w, ["Account fees (review deductibility)", oi["fees_aud"]])
     _w(w, ["Realised FX gain/loss (Div 775 ordinary income)", oi["forex_pl_aud"]])
