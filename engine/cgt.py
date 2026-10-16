@@ -42,6 +42,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
+from typing import Callable
 
 from . import forex
 from .fx import RbaRates, FxError
@@ -303,6 +304,9 @@ class UnmatchedClose:
     # Buying back (or expiry of) an option written before the data: its premium
     # was a D2 gain of the year it was written, so only this close leg counts.
     written: bool = False
+    # That premium per IBKR's Basis (None when the Basis does not give it), for
+    # the closed-basis comparison only.
+    premium: float | None = None
 
 
 @dataclass
@@ -481,9 +485,14 @@ def run_fifo(trades: list[Trade], splits: list[SplitEvent],
                 # Buying back an option is closing one that was written: its
                 # premium is not in this year (D2 at grant, s 104-40(2)).
                 written = is_option and remaining > 0
+                # IBKR's Basis less the in-data lots' opening cash is the
+                # premium of these units, as for a lot held before the data.
+                premium = (t.ib_basis - in_data_open
+                           if written and t.ib_basis and not pre_taken else None)
                 res.unmatched.append(UnmatchedClose(
                     trade=t, qty_unmatched=remaining, close_cash_alloc=rem_cash,
-                    ib_rpl=rpl_alloc, resolved=bool(t.ib_rpl) or written, written=written))
+                    ib_rpl=rpl_alloc, resolved=bool(t.ib_rpl) or written, written=written,
+                    premium=premium))
             elif fold_close:
                 # Exercised or assigned, but opened before the data: no lot to
                 # close. Fold the option's opening cash from IBKR's Basis into the
@@ -668,17 +677,21 @@ def _row_key(t: Trade) -> tuple:
     return (t.category, t.currency, t.dt, t.qty, round(t.proceeds, 6), round(t.comm, 6))
 
 
-def _included_in(snap: PositionSnapshot, t: Trade) -> bool:
+def _included_in(snap: PositionSnapshot) -> "Callable[[Trade], bool]":
     """Whether a statement's opening positions already include a trade. Those
     dated before its first day do. So do those dated on its first day that are
     not its own rows: IBKR files rows by their US report date, so the statement
     before carries the previous US session's trades, dated this day in Sydney
     time, and this one does not repeat them."""
-    d = t.dt.date()
-    if d != snap.as_of:
-        return d < snap.as_of
-    own = {_row_key(o) for o in (snap.owner.trades if snap.owner else [])}
-    return snap.owner is not None and _row_key(t) not in own
+    own = None if snap.owner is None else {
+        _row_key(o) for o in snap.owner.trades if o.dt.date() == snap.as_of}
+
+    def included(t: Trade) -> bool:
+        d = t.dt.date()
+        if d != snap.as_of:
+            return d < snap.as_of
+        return own is not None and _row_key(t) not in own
+    return included
 
 
 def _pre_data_lots(stmt: Statement) -> dict:
@@ -696,13 +709,14 @@ def _pre_data_lots(stmt: Statement) -> dict:
     if not snaps:
         return {}
     first = min(snaps, key=lambda p: p.as_of)
+    included = _included_in(first)
     start = datetime.combine(min(first.as_of, stmt.period_start or first.as_of), time())
     lots = {}
     for (cat, sym), qty in sorted(first.qty.items()):
         if cat not in CGT_CATEGORIES:
             continue
         same = [t for t in stmt.trades if (t.category, t.symbol) == (cat, sym)]
-        qty -= sum(t.qty for t in same if _included_in(first, t))
+        qty -= sum(t.qty for t in same if included(t))
         if abs(qty) < QTY_EPS:
             continue
         ccy = (same[0].currency if same else None) or next(
@@ -724,11 +738,12 @@ def _snapshot_mismatches(stmt: Statement, pre_lots: dict, splits: list[SplitEven
     split_roots = {(ev.old_symbol or ev.new_symbol or "").partition(" ")[0] for ev in splits}
     out = []
     for snap in snaps[1:]:
+        included = _included_in(snap)
         held: dict = defaultdict(float)
         for key, lot in pre_lots.items():
             held[key] += lot.qty
         for t in stmt.trades:
-            if t.category in CGT_CATEGORIES and _included_in(snap, t):
+            if t.category in CGT_CATEGORIES and included(t):
                 held[(t.category, t.symbol)] += t.qty
         keys = set(held) | {k for k in snap.qty if k[0] in CGT_CATEGORIES}
         diffs = [f"{sym} {snap.qty.get((cat, sym), 0.0):g} (the data adds up to "
@@ -786,6 +801,19 @@ def _rows_after_statement_end(stmt: Statement, fy_end: date) -> list[str]:
         out += [f"trade {t.symbol} {t.dt.date()}" for t in own.trades
                 if t.dt.date() > fy_end and t.category in CGT_CATEGORIES]
     return out
+
+
+def _premiums_by_symbol(items: list[tuple]) -> list[str]:
+    """(symbol, currency, premium or None) -> one "SYM (USD 1,234.00)" per
+    symbol, the premiums of its partial closes added up."""
+    known: dict = defaultdict(float)
+    ccys = {}
+    for sym, ccy, premium in items:
+        ccys.setdefault(sym, ccy)
+        if premium is not None:
+            known[sym] += premium
+    return [f"{sym} ({ccys[sym]} {known[sym]:,.2f})" if sym in known else sym
+            for sym in sorted(ccys)]
 
 
 def _entity_notes(opts: Options) -> list[str]:
@@ -1088,14 +1116,18 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
                 # Written before the data: its premium was a D2 gain of the year it
                 # was written (s 104-40(2)). Only the close leg belongs to this year.
                 g = aud_close + m.close_aud_adj
-                note = (f"written {before_data} (premium {m.currency} {m.open_cash:,.2f} "
-                        "per IBKR's basis) — its D2 gain belongs to the year it was "
-                        "written; only the close leg is recognised this year")
-                # The closed-basis comparison counts the premium now; its write
-                # date is unknown, so it takes the close-date rate.
-                deferred_extra += fx.to_aud(m.open_cash, m.currency, close_d)[0]
+                premium = None if m.basis_unknown else m.open_cash
+                note = (f"written {before_data} (premium "
+                        + (f"{m.currency} {premium:,.2f} per IBKR's basis" if premium is not None
+                           else "not in IBKR's basis: left out of the closed-basis comparison")
+                        + ") — its D2 gain belongs to the year it was written; only the close "
+                        "leg is recognised this year")
+                if premium is not None:
+                    # The closed-basis comparison counts the premium now; its write
+                    # date is unknown, so it takes the close-date rate.
+                    deferred_extra += fx.to_aud(premium, m.currency, close_d)[0]
                 if data_start_d and data_start_d > fy_start:
-                    pre_maybe_this_fy.append(f"{m.symbol} ({m.currency} {m.open_cash:,.2f})")
+                    pre_maybe_this_fy.append((m.symbol, m.currency, premium))
             else:
                 aud_open, m.open_fx = fx.to_aud(m.open_cash, m.currency, close_d)
                 # an in-data premium folded into the closing leg keeps its own rate
@@ -1113,9 +1145,10 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
             closed_rows.append(dict(
                 category=m.category, symbol=m.symbol, currency=m.currency,
                 qty=round(m.qty, 4), open_date=before_data, close_date=str(close_d),
-                days_held="", open_cash=round(m.open_cash, 2),
+                days_held="", open_cash="" if m.basis_unknown else round(m.open_cash, 2),
                 close_cash=round(m.close_cash, 2), open_fx=m.open_fx, close_fx=m.close_fx,
-                gain_native=round(m.gain_native, 2), gain_aud=round(g, 2),
+                gain_native="" if m.basis_unknown else round(m.gain_native, 2),
+                gain_aud=round(g, 2),
                 short="Y" if m.short else "", expiry="Y" if m.via_expiry else "",
                 discount_eligible="", note=note))
             continue
@@ -1183,12 +1216,11 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
             aud_g, fxr = fx.to_aud(u.close_cash_alloc, u.trade.currency, close_d)
             u.aud_gain = aud_g
             unmatched_total_aud += aud_g
-            if u.trade.ib_rpl:
-                # premium = IBKR's P/L less the close leg, at the close-date rate
-                deferred_extra += fx.to_aud(u.ib_rpl - u.close_cash_alloc, u.trade.currency,
-                                            close_d)[0]
+            if u.premium is not None:
+                # for the closed-basis comparison, at the close-date rate
+                deferred_extra += fx.to_aud(u.premium, u.trade.currency, close_d)[0]
             if data_start_d and data_start_d > fy_start:
-                pre_maybe_this_fy.append(u.trade.symbol)
+                pre_maybe_this_fy.append((u.trade.symbol, u.trade.currency, u.premium))
         elif u.resolved and in_fy:
             aud_g, fxr = fx.to_aud(u.ib_rpl, u.trade.currency, close_d)
             u.aud_gain = aud_g
@@ -1210,7 +1242,10 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
             ib_realized_pl=round(u.ib_rpl, 2) if u.resolved else "",
             gain_aud=round(aud_g, 2) if u.resolved else "UNRESOLVED",
             note="written before uploaded data; its premium was a D2 gain of the year it "
-                 "was written, so only the close leg is counted" if u.written else
+                 "was written, so only the close leg is counted"
+                 + ("" if u.premium is not None else
+                    " (premium not in IBKR's basis: left out of the closed-basis comparison)")
+                 if u.written else
                  "acquired before uploaded data; IBKR Realized P/L used at close-date FX; "
                  "no discount claimed" if u.resolved else
                  "acquired before uploaded data and no IBKR Realized P/L available"))
@@ -1247,7 +1282,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
                     f"{sym}: written {before_data} and still open at {fy_end} — its D2 gain "
                     "belongs to the year it was written")
                 if data_start_d and data_start_d > fy_start:
-                    pre_maybe_this_fy.append(sym)
+                    pre_maybe_this_fy.append((sym, lot.currency, None))
                 continue
             if not (fy_start <= open_d <= fy_end):
                 if open_d < fy_start:
@@ -1277,7 +1312,8 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
                         f"{m.symbol}: written {before_data}, still open at {fy_end}, closed "
                         f"{cd} — its D2 gain belongs to the year it was written")
                     if data_start_d and data_start_d > fy_start:
-                        pre_maybe_this_fy.append(f"{m.symbol} ({m.currency} {m.open_cash:,.2f})")
+                        pre_maybe_this_fy.append(
+                            (m.symbol, m.currency, None if m.basis_unknown else m.open_cash))
                 continue
             if fy_start <= od <= fy_end and cd > fy_end:
                 prem_aud, fxr = fx.to_aud(m.open_cash, m.currency, od)
@@ -1334,7 +1370,7 @@ def compute_tax_report(stmt: Statement, opts: Options, fx: RbaRates | None = Non
             f"The uploaded data starts {data_start_d}, after {fy_start}. These options were "
             f"written before the data starts, possibly after {fy_start}; if so, their premiums "
             f"are D2 gains of {fy_label(opts.fy_end_year)} that these figures leave out: "
-            + ", ".join(sorted(set(pre_maybe_this_fy)))
+            + ", ".join(_premiums_by_symbol(pre_maybe_this_fy))
             + f". Upload a statement starting on or before {fy_start}.")
 
     # Transfers that cancel a prior-year D2 -> amendment flags

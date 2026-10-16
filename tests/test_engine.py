@@ -771,6 +771,29 @@ def test_last_us_session_dated_next_day_belongs_before_the_next_statement(first_
     assert rep["carry_forward"] == []
 
 
+def test_opening_position_check_stays_linear_in_the_number_of_trades(monkeypatch):
+    """Every trade on a statement's first day is checked against that
+    statement's own rows: the set of them is built once, not once per trade."""
+    import engine.cgt as cgt
+    calls = {"n": 0}
+    real = cgt._row_key
+
+    def counting(t):
+        calls["n"] += 1
+        return real(t)
+    monkeypatch.setattr(cgt, "_row_key", counting)
+    n = 60
+    first = statement("July 1, 2024 - June 30, 2025", "x", prior_positions=[], trades=[
+        trade("Stocks", f"S{i}", "2025-07-01, 02:15:00", 1, -10, 0, code="O") for i in range(n)])
+    second = statement("July 1, 2025 - June 30, 2026", "x", trades=[
+        trade("Stocks", f"T{i}", "2025-07-01, 23:45:00", 1, -10, 0, code="O") for i in range(n)],
+        prior_positions=[("Stocks", f"S{i}", 1) for i in range(n)])
+    st = merge_statements([parse_statement(first, "a.csv"), parse_statement(second, "b.csv")])
+    rep = compute_tax_report(st, Options(fy_end_year=2026), FX)
+    assert not any("DO NOT ADD UP" in w for w in rep["warnings"])
+    assert calls["n"] < 10 * n          # the old check made n * n calls per snapshot
+
+
 def test_premium_folded_into_shares_held_before_the_data_keeps_its_write_date_rate():
     """A call written in the data, assigned against shares held before it: the
     premium in the sale keeps the write-date rate (s 960-50(6) item 5)."""
@@ -796,6 +819,48 @@ def test_closed_basis_comparison_counts_the_premium_of_an_option_written_before_
     s, d = rep["summary"], dt.date(2025, 9, 15)
     assert s["closed_net"] == pytest.approx(FX.to_aud(-201, "USD", d)[0], abs=0.01)
     assert s["deferred_alternative"] == pytest.approx(FX.to_aud(298, "USD", d)[0], abs=0.01)
+
+
+@pytest.mark.parametrize("prior", [[(OPT, "MSFT 19DEC25 400 P", -1)], None])
+def test_closed_basis_premium_of_a_row_closing_old_and_new_contracts(prior):
+    """One buy-back closes a contract written in the data (premium 100) and one
+    written before it (premium 500): IBKR's Basis less the in-data premium is
+    the older one's, with or without the Mark-to-Market summary."""
+    s_ = "MSFT 19DEC25 400 P"
+    rep = run([trade(OPT, s_, "2025-08-04, 10:00:00", -1, 101, -1, code="O"),
+               trade(OPT, s_, "2026-03-02, 10:00:00", 2, -200, -2, basis="600", rpl="398",
+                     code="C")], prior_positions=prior)
+    s, d = rep["summary"], dt.date(2026, 3, 2)
+    assert s["deferred_alternative"] == pytest.approx(
+        s["closed_net"] + FX.to_aud(500, "USD", d)[0], abs=0.02)
+
+
+def test_closed_basis_premium_comes_from_the_basis_not_the_realized_pl():
+    rep = run([trade(OPT, "MSFT 19DEC25 400 P", "2026-03-02, 10:00:00", 1, -100, -1,
+                     basis="499", rpl="", code="C")])
+    s, d = rep["summary"], dt.date(2026, 3, 2)
+    assert s["deferred_alternative"] == pytest.approx(
+        s["closed_net"] + FX.to_aud(499, "USD", d)[0], abs=0.02)
+
+
+def test_closed_basis_leaves_out_a_premium_the_basis_does_not_give():
+    s_ = "MSFT 19DEC25 400 P"
+    rep = run([trade(OPT, s_, "2025-08-04, 10:00:00", -1, 101, -1, code="O"),
+               trade(OPT, s_, "2026-03-02, 10:00:00", 2, -200, -2, basis="", rpl="398",
+                     code="C")], prior_positions=[(OPT, s_, -1)])
+    s = rep["summary"]
+    assert s["deferred_alternative"] == s["closed_net"]
+    (pre,) = [l for l in rep["closed_lots"] if l["open_date"].startswith("before")]
+    assert pre["open_cash"] == "" and "left out of the closed-basis comparison" in pre["note"]
+
+
+def test_partly_closed_option_is_listed_once_in_the_possibly_this_year_warning():
+    rows = [trade(OPT, "ABC 19DEC25 50 P", d, 1, -100, -1, basis="250", rpl="149", code="C")
+            for d in ("2025-12-01, 10:00:00", "2025-12-02, 10:00:00")]
+    rep = run(rows, period="November 11, 2025 - June 30, 2026",
+              prior_positions=[(OPT, "ABC 19DEC25 50 P", -2)])
+    (w,) = [w for w in rep["warnings"] if "possibly after 2025-07-01" in w]
+    assert w.count("ABC 19DEC25 50 P") == 1 and "ABC 19DEC25 50 P (USD 500.00)" in w
 
 
 def test_option_held_before_the_data_under_the_old_ticker_is_renamed():
@@ -851,6 +916,20 @@ def test_fito_candidate_leaves_out_withholding_above_the_treaty_rate():
     assert any(l.startswith("Foreign tax withheld less that excess (FITO candidate),")
                for l in lines)
     assert not any(l.startswith("Withholding tax (FITO)") for l in lines)
+    assert not any("Withholding tax (foreign income tax offset)" in l for l in lines)
+
+
+@pytest.mark.parametrize("entity,schedule", [("individual", False), ("smsf", True)])
+def test_loss_split_follows_losses_applied_with_the_entitys_labels(entity, schedule):
+    rep = run([trade("Stocks", "AAA", "2025-08-01, 10:00:00", 10, -1000, -1, code="O"),
+               trade("Stocks", "AAA", "2026-02-01, 10:00:00", -10, 1500, -1,
+                     basis="-1001", rpl="498", code="C")], entity=entity, carried=100)
+    lines = build_workpaper_csv(rep).splitlines()
+    i = next(n for n, l in enumerate(lines) if l.startswith("Losses applied,"))
+    assert lines[i + 1].startswith("  of which current-year losses")
+    assert lines[i + 2].startswith("  of which prior-year net losses")
+    assert ("CGT schedule item 2 label B" in lines[i + 1]) == schedule
+    assert ("CGT schedule item 2 label C" in lines[i + 2]) == schedule
 
 
 def test_option_written_and_bought_back_in_the_year_counts_gross():

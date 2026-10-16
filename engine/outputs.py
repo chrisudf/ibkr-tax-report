@@ -70,7 +70,8 @@ TABLES = {
 
 OTHER_INCOME_TABLES = {
     "dividends": "Dividends (gross)",
-    "withholding_tax": "Withholding tax (foreign income tax offset)",
+    "withholding_tax": "Foreign tax withheld (the FITO candidate in the summary leaves "
+                       "out any US withholding above the 15% treaty rate)",
     "australian_withholding": "Australian tax withheld in AUD (NOT a foreign income tax "
                               "offset)",
     "interest": "Interest (IBKR nets borrow fees into this section — do not deduct "

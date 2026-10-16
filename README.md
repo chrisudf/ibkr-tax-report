@@ -355,12 +355,12 @@ runs the validated refresh weekly. The report shows the coverage it used
   periods are safe); consecutive years give exact FIFO history. Closing trades
   with no visible opening lot fall back to IBKR's Realized P/L with loud
   warnings.
-- Other amounts: dividends, withholding tax (FITO), interest (IBKR nets borrow
-  fees into it — the borrow-fee detail is informational only), account fees,
-  and realised FX gains/losses (Div 775 ordinary income, not CGT). For a
-  non-AUD base account Div 775 is worked out FIFO from the cash flows; for an
-  AUD base account it comes from file (b) — see
-  [Foreign currency](#foreign-currency-div-775).
+- Other amounts: dividends, foreign tax withheld (FITO candidate, less any US
+  excess over the treaty rate), interest (IBKR nets borrow fees into it — the
+  borrow-fee detail is informational only), account fees, and realised FX
+  gains/losses (Div 775 ordinary income, not CGT). For a non-AUD base account
+  Div 775 is worked out FIFO from the cash flows; for an AUD base account it
+  comes from file (b) — see [Foreign currency](#foreign-currency-div-775).
 - Reconciliation: per-row vs IBKR Realized P/L, year-end parcels vs the Open
   Positions snapshot, with expected differences (premium folds) auto-annotated.
 
